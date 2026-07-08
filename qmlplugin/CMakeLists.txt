@@ -1,19 +1,31 @@
-add_library(
-    sensorlogdqmlplugin
+set(SRC
     sensorlogdqmlplugin.cpp
-    sensorlogdqmlplugin.h
     stepsDataLoader.cpp
-    stepsDataLoader.h
     hrDataLoader.cpp
-    hrDataLoader.h
     weightDataLoader.cpp
-    weightDataLoader.h
     barometerDataLoader.cpp
-    barometerDataLoader.h
     loggerSettings.cpp
-    loggerSettings.h
     ../common.cpp
+)
+
+SET(HEADERS
+    sensorlogdqmlplugin.h
+    stepsDataLoader.h
+    hrDataLoader.h
+    weightDataLoader.h
+    barometerDataLoader.h
+    loggerSettings.h
     ../common.h
+)
+
+qt6_add_qml_module(sensorlogdqmlplugin
+    URI org.asteroid.sensorlogd
+    VERSION 1.0
+    PLUGIN_TARGET sensorlogdqmlplugin
+    CLASS_NAME LogdPlugin
+    NO_GENERATE_PLUGIN_SOURCE
+    SOURCES ${SRC} ${HEADERS}
+    QML_FILES ${controls-qml}
 )
 
 target_link_libraries(
@@ -26,9 +38,9 @@ target_link_libraries(
 
 install(
     TARGETS sensorlogdqmlplugin
-	DESTINATION ${INSTALL_QML_IMPORT_DIR}/org/asteroid/sensorlogd
+	DESTINATION ${KDE_INSTALL_QMLDIR}/org/asteroid/sensorlogd
 )
 install(
-    FILES qmldir
-	DESTINATION ${INSTALL_QML_IMPORT_DIR}/org/asteroid/sensorlogd
+    FILES "${CMAKE_CURRENT_BINARY_DIR}/qmldir"
+	DESTINATION ${KDE_INSTALL_QMLDIR}/org/asteroid/sensorlogd
 )
