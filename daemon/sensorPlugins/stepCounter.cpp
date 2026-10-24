@@ -70,6 +70,10 @@ void StepCounterPlugin::triggerRecording()
 {
     qDebug() << "stepcounter interval recording";
     recordIntervalTimer->start(interval);
+    if (stepcounterSensor->reading()->timestamp() == 0) { // no sample from the sensor yet (just started; a sensor hub may still be batching)
+        qDebug() << "no step counter reading yet - not recording";
+        return;
+    }
     int rawSteps = stepcounterSensor->reading()->steps();
     if (lastRecordTime.date() != QDate::currentDate()) { // ok, so the date has changed.
         if (dayFileExists(sensorPathPrefix)) { // this likely means we have just had a system time change
