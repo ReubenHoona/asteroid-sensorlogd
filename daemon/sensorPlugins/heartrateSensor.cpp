@@ -42,7 +42,6 @@ void HeartrateSensorPlugin::timeUpdate() {
     qDebug() << "time until next steps recording" << recordIntervalTimer->remainingTime() << " elapsed = " << elapsed << " lastRecordTime " << lastRecordTime.toMSecsSinceEpoch();
     if (elapsed > interval) { //if too much time has passed, reset the timer and record
         triggerRecording();
-        lastRecordTime = QDateTime::currentDateTime();
     } else { //otherwise, restart the timer and compensate for time spent in suspend
         recordIntervalTimer->start(interval - elapsed);
     }
@@ -51,6 +50,7 @@ void HeartrateSensorPlugin::timeUpdate() {
 void HeartrateSensorPlugin::triggerRecording() {
     qDebug() << "heartrate interval recording";
     recordIntervalTimer->start(interval);
+    lastRecordTime = QDateTime::currentDateTime();
     hrmSensor->start();
 }
 
