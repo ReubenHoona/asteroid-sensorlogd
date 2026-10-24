@@ -32,11 +32,13 @@ public slots:
 
 private slots:
     void finishRecording();
+    void abortRecording();
 
 private:
     QDateTime lastRecordTime;
     int interval;
     QTimer *recordIntervalTimer;
+    QTimer *recordTimeoutTimer;
     QHrmSensor *hrmSensor;
 
     const QString sensorPathPrefix = "heartrateMonitor";

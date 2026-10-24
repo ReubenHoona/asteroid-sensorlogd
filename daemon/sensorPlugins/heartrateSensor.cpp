@@ -32,6 +32,13 @@ HeartrateSensorPlugin::HeartrateSensorPlugin(QObject *parent, int initInterval) 
     qDebug() << "heartrate sensor is enabled. interval is (ms) " << interval;
     recordIntervalTimer = new QTimer(this);
     connect(recordIntervalTimer,SIGNAL(timeout()),this,SLOT(triggerRecording()));
+
+    // give up on a recording that gets no usable reading (e.g. off the wrist)
+    // rather than keeping the sensor on until the next one
+    recordTimeoutTimer = new QTimer(this);
+    recordTimeoutTimer->setSingleShot(true);
+    recordTimeoutTimer->setInterval(60000);
+    connect(recordTimeoutTimer,SIGNAL(timeout()),this,SLOT(abortRecording()));
     recordIntervalTimer->setSingleShot(true);
     recordIntervalTimer->start(interval);
     lastRecordTime = QDateTime::currentDateTime();
@@ -51,6 +58,7 @@ void HeartrateSensorPlugin::triggerRecording() {
     qDebug() << "heartrate interval recording";
     recordIntervalTimer->start(interval);
     lastRecordTime = QDateTime::currentDateTime();
+    recordTimeoutTimer->start();
     hrmSensor->start();
 }
 
@@ -63,5 +71,11 @@ void HeartrateSensorPlugin::finishRecording() {
         return;
     }
     fileAddRecord(sensorPathPrefix,QString::number(bpm));
+    recordTimeoutTimer->stop();
+    hrmSensor->stop();
+}
+
+void HeartrateSensorPlugin::abortRecording() {
+    qDebug() << "no usable heartrate reading, stopping until the next recording";
     hrmSensor->stop();
 }

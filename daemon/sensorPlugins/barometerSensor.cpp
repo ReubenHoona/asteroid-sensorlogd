@@ -35,6 +35,13 @@ BarometerSensorPlugin::BarometerSensorPlugin(QObject *parent, int initInterval) 
     m_barometerOffsetGconf = new MGConfItem("/org/asteroidos/sensors/barometer-offset");
     recordIntervalTimer = new QTimer(this);
     connect(recordIntervalTimer,SIGNAL(timeout()),this,SLOT(triggerRecording()));
+
+    // give up on a recording that gets no usable reading (e.g. off the wrist)
+    // rather than keeping the sensor on until the next one
+    recordTimeoutTimer = new QTimer(this);
+    recordTimeoutTimer->setSingleShot(true);
+    recordTimeoutTimer->setInterval(10000);
+    connect(recordTimeoutTimer,SIGNAL(timeout()),this,SLOT(abortRecording()));
     recordIntervalTimer->setSingleShot(true);
     recordIntervalTimer->start(interval);
     lastRecordTime = QDateTime::currentDateTime();
@@ -54,6 +61,7 @@ void BarometerSensorPlugin::triggerRecording() {
     qDebug() << "barometer interval recording";
     recordIntervalTimer->start(interval);
     lastRecordTime = QDateTime::currentDateTime();
+    recordTimeoutTimer->start();
     barometerSensor->start();
 }
 
@@ -67,5 +75,11 @@ void BarometerSensorPlugin::finishRecording() {
     }
     fileAddRecord(sensorPathPrefix,QString::number(pressure));
     fileAddRecord(sensorPathPrefixCompensated,QString::number(pressure - m_barometerOffsetGconf->value(0).toInt()));
+    recordTimeoutTimer->stop();
+    barometerSensor->stop();
+}
+
+void BarometerSensorPlugin::abortRecording() {
+    qDebug() << "no usable barometer reading, stopping until the next recording";
     barometerSensor->stop();
 }
