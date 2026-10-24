@@ -22,7 +22,7 @@ class HeartrateSensorPlugin : public QObject
 {
     Q_OBJECT
 public:
-    explicit HeartrateSensorPlugin(QObject *parent = 0, int initInterval = 600000);
+    explicit HeartrateSensorPlugin(QObject *parent = 0, int initInterval = 600000, bool continuous = false);
     virtual ~HeartrateSensorPlugin() {};
 
     void timeUpdate();
@@ -40,6 +40,14 @@ private:
     QTimer *recordIntervalTimer;
     QTimer *recordTimeoutTimer;
     QHrmSensor *hrmSensor;
+
+    // continuous mode: the sensor stays on (a sensor hub can batch the samples
+    // while the system sleeps) and one average per minute is logged
+    void addContinuousSample(int bpm);
+    bool continuous;
+    qint64 minuteStart = 0;
+    int minuteSum = 0;
+    int minuteCount = 0;
 
     const QString sensorPathPrefix = "heartrateMonitor";
 };
