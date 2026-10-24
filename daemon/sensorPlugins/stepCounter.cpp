@@ -68,6 +68,7 @@ void StepCounterPlugin::timeUpdate()
 void StepCounterPlugin::triggerRecording()
 {
     qDebug() << "stepcounter interval recording";
+    recordIntervalTimer->start(interval);
     int rawSteps = stepcounterSensor->reading()->steps();
     if (lastRecordTime.date() != QDate::currentDate()) { // ok, so the date has changed.
         if (dayFileExists(sensorPathPrefix)) { // this likely means we have just had a system time change
