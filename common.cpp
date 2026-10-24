@@ -34,7 +34,7 @@ void fileAddRecord(QString sensorPrefix, QString logdata, QDateTime recordTime) 
     }
     file.seek(file.size());
     QTextStream out(&file);
-    out << QString::number(recordTime.currentSecsSinceEpoch()) + ":" + logdata + "\n";
+    out << QString::number(recordTime.toSecsSinceEpoch()) + ":" + logdata + "\n";
     file.close();
 }
 
