@@ -44,7 +44,8 @@ void Logger::setup() {
 
 //intialise HRM
     if (heartrateSensorEnabled) {
-        m_heartrateSensor = new HeartrateSensorPlugin(this,settings->value("heartrateSensor/interval",600000).toInt());
+        m_heartrateSensor = new HeartrateSensorPlugin(this,settings->value("heartrateSensor/interval",600000).toInt(),
+                                                      settings->value("heartrateSensor/continuous",false).toBool());
     }
 
 //initialise step counter
