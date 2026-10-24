@@ -25,6 +25,7 @@ HeartrateSensorPlugin::HeartrateSensorPlugin(QObject *parent, int initInterval) 
     interval = initInterval;
 
     hrmSensor = new QHrmSensor(this);
+    hrmSensor->setAlwaysOn(true); // sensorfw stops sensors in standby (display off) otherwise
     connect(hrmSensor,SIGNAL(readingChanged()),this,SLOT(finishRecording()));
 
     setupFilePath(sensorPathPrefix);

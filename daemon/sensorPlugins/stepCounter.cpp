@@ -29,6 +29,7 @@ StepCounterPlugin::StepCounterPlugin(QObject* parent, int initInterval, bool dae
     interval = initInterval;
 
     stepcounterSensor = new QStepCounterSensor(this);
+    stepcounterSensor->setAlwaysOn(true); // sensorfw stops sensors in standby (display off) otherwise
     stepcounterSensor->start();
 
     qDebug() << "step counter sensor is enabled. interval is (ms) " << interval;

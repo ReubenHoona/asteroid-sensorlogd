@@ -26,6 +26,8 @@ BarometerSensorPlugin::BarometerSensorPlugin(QObject *parent, int initInterval) 
     interval = initInterval;
 
     barometerSensor = new QPressureSensor(this);
+
+    barometerSensor->setAlwaysOn(true); // sensorfw stops sensors in standby (display off) otherwise
     connect(barometerSensor,SIGNAL(readingChanged()),this,SLOT(finishRecording()));
 
     setupFilePath(sensorPathPrefix);
