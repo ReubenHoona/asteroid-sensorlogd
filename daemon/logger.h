@@ -42,13 +42,12 @@ private slots:
 private:
     QDBusServiceWatcher *m_sensorfwWatcher;
     bool m_setupDone = false;
-    QDBusInterface *m_iface;
     bool heartrateSensorEnabled = false;
-    HeartrateSensorPlugin *m_heartrateSensor;
+    HeartrateSensorPlugin *m_heartrateSensor = nullptr;
     bool stepCounterEnabled = false;
-    StepCounterPlugin *m_stepCounter;
+    StepCounterPlugin *m_stepCounter = nullptr;
     bool barometerEnabled = false;
-    BarometerSensorPlugin *m_barometerSensor;
+    BarometerSensorPlugin *m_barometerSensor = nullptr;
     bool daemonFresh;
     QSettings *settings;
     bool getDaemonFresh();
