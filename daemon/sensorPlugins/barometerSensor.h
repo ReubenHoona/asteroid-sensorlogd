@@ -27,13 +27,15 @@ public:
     virtual ~BarometerSensorPlugin() {};
 
     void timeUpdate();
+    // a recording is waiting for its reading
+    bool measuring() const { return m_measuring; }
 
 public slots:
     void triggerRecording();
+    void abortRecording();
 
 private slots:
     void finishRecording();
-    void abortRecording();
 
 private:
     QDateTime lastRecordTime;
@@ -41,6 +43,7 @@ private:
     QTimer *recordIntervalTimer;
     QTimer *recordTimeoutTimer;
     QPressureSensor *barometerSensor;
+    bool m_measuring = false;
     QSettings *m_settings;
     MGConfItem *m_barometerOffsetGconf;
 

@@ -26,6 +26,10 @@ public:
     virtual ~HeartrateSensorPlugin() {};
 
     void timeUpdate();
+    // at a periodic system wake, after the hub's batch was handed over
+    void wakeUpdate();
+    // an interval recording is waiting for a usable reading
+    bool measuring() const { return m_measuring; }
 
 public slots:
     void triggerRecording();
@@ -41,6 +45,8 @@ private:
     QTimer *recordIntervalTimer;
     QTimer *recordTimeoutTimer;
     QHrmSensor *hrmSensor;
+    bool m_measuring = false;
+    qint64 m_startedMs = 0;     // wall clock, when the recording started
     void makeSensor();
     bool startSensor();
     QTimer *m_retryTimer; // continuous mode: start again after a failed start

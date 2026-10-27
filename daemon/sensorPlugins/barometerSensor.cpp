@@ -51,8 +51,10 @@ BarometerSensorPlugin::BarometerSensorPlugin(QObject *parent, int initInterval) 
 
 void BarometerSensorPlugin::timeUpdate() {
     uint elapsed = QDateTime::currentMSecsSinceEpoch() - lastRecordTime.toMSecsSinceEpoch();
+    if (m_measuring && elapsed > (uint)recordTimeoutTimer->interval())
+        abortRecording(); // its timeout did not run: the system was suspended
     qDebug() << "time until next steps recording" << recordIntervalTimer->remainingTime() << " elapsed = " << elapsed << " lastRecordTime " << lastRecordTime.toMSecsSinceEpoch();
-    if (elapsed > interval) { //if too much time has passed, reset the timer and record
+    if (elapsed + 30000 > (uint)interval) { //if too much time has passed, reset the timer and record
         triggerRecording();
     } else { //otherwise, restart the timer and compensate for time spent in suspend
         recordIntervalTimer->start(interval - elapsed);
@@ -64,6 +66,7 @@ void BarometerSensorPlugin::triggerRecording() {
     recordIntervalTimer->start(interval);
     lastRecordTime = QDateTime::currentDateTime();
     recordTimeoutTimer->start();
+    m_measuring = true;
     barometerSensor->start();
 }
 
@@ -75,13 +78,17 @@ void BarometerSensorPlugin::finishRecording() {
         qDebug() << "barometer sensor accuracy insufficient. waiting.";
         return;
     }
+    if (!m_measuring)
+        return; // a late sample after the recording ended
     fileAddRecord(sensorPathPrefix,QString::number(pressure));
     fileAddRecord(sensorPathPrefixCompensated,QString::number(pressure - m_barometerOffsetGconf->value(0).toInt()));
+    m_measuring = false;
     recordTimeoutTimer->stop();
     barometerSensor->stop();
 }
 
 void BarometerSensorPlugin::abortRecording() {
     qDebug() << "no usable barometer reading, stopping until the next recording";
+    m_measuring = false;
     barometerSensor->stop();
 }

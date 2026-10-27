@@ -25,6 +25,8 @@
 #include "sensorPlugins/heartrateSensor.h"
 #include "sensorPlugins/barometerSensor.h"
 
+class BackgroundActivity;
+
 class Logger : public QObject
 {
     Q_OBJECT
@@ -38,6 +40,10 @@ public slots:
 private slots:
     void displayOn(QString displayState);
     void sensorfwRegistered();
+    void wakeRunning();
+    void wakeWork();
+    void wakeCheckDone();
+    void wakeDone();
 
 private:
     QDBusServiceWatcher *m_sensorfwWatcher;
@@ -51,6 +57,18 @@ private:
     bool daemonFresh;
     QSettings *settings;
     bool getDaemonFresh();
+
+    // Periodic system wake (dsme iphb through libkeepalive): the recordings
+    // run on it, so they happen with the system suspended too, and the sensor
+    // hub keeps heart rate and steps batched in between (non-wake-up)
+    void scheduleWake(int seconds);
+    void flushHub();
+    BackgroundActivity *m_wake = nullptr;
+    QTimer *m_wakeSettle;   // flush -> batched samples delivered
+    QTimer *m_wakePoll;     // a short recording (barometer) still running
+    QTimer *m_wakeLimit;    // the keepalive never lasts longer than this
+    int m_wakeInterval = 600; // [s]
+    bool m_flushWarned = false;
 
 };
     bool dayFileExists(QString sensorPrefix, QDateTime date = QDateTime::currentDateTime()); //check if today has a log file for the given sensor

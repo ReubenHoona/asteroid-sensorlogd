@@ -22,8 +22,9 @@ target_link_libraries(
         Qt::Qml
         Qt::Sensors
         ${mlite6_LIBRARIES}
+        ${keepalive_LIBRARIES}
 )
-target_include_directories(sensorlogd PRIVATE ${mlite6_INCLUDE_DIRS})
+target_include_directories(sensorlogd PRIVATE ${mlite6_INCLUDE_DIRS} ${keepalive_INCLUDE_DIRS})
 install(TARGETS sensorlogd DESTINATION bin)
 install(
     FILES systemd/asteroid-sensorlogd.service

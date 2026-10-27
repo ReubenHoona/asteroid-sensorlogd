@@ -130,7 +130,7 @@ void StepCounterPlugin::timeUpdate()
     QDateTime currDateTime = QDateTime::currentDateTime();
     uint elapsed = currDateTime.toMSecsSinceEpoch() - lastRecordTime.toMSecsSinceEpoch();
     qDebug() << "time until next steps recording" << recordIntervalTimer->remainingTime() << " elapsed = " << elapsed << " lastRecordTime " << lastRecordTime.toMSecsSinceEpoch();
-    if (elapsed > interval) { // if too much time has passed, reset the timer and record
+    if (elapsed + 30000 > (uint)interval) { // if too much time has passed, reset the timer and record
         triggerRecording();
     } else { // otherwise, restart the timer and compensate for time spent in suspend
         recordIntervalTimer->start(interval - elapsed);
