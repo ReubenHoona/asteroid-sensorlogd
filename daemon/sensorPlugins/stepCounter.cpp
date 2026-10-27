@@ -27,31 +27,73 @@ StepCounterPlugin::StepCounterPlugin(QObject* parent, int initInterval, bool dae
     : QObject(parent)
 {
     interval = initInterval;
-
-    stepcounterSensor = new QStepCounterSensor(this);
-    stepcounterSensor->setAlwaysOn(true); // sensorfw stops sensors in standby (display off) otherwise
-    stepcounterSensor->start();
+    m_daemonFresh = daemonFresh;
+    m_settings = new QSettings("asteroid", "sensorlogd", this);
 
     qDebug() << "step counter sensor is enabled. interval is (ms) " << interval;
     recordIntervalTimer = new QTimer(this);
     connect(recordIntervalTimer, SIGNAL(timeout()), this, SLOT(triggerRecording()));
     recordIntervalTimer->setSingleShot(true);
     recordIntervalTimer->start(interval);
-    QDateTime currDateTime = QDateTime::currentDateTime();
+    lastRecordTime = QDateTime::currentDateTime();
 
     setupFilePath(sensorPathPrefix);
-    while (!stepcounterSensor->isActive()) { }
-    m_settings = new QSettings("asteroid", "sensorlogd");
 
-    if (dayFileExists(sensorPathPrefix) && daemonFresh) {
-        QStringList lastLineData = fileGetPrevRecord(sensorPathPrefix);
-        lastRecordTime = QDateTime::currentDateTime();
-        m_stepsOffset = stepcounterSensor->reading()->steps() - lastLineData[1].toInt(); // we reset the step count, ignoring all steps that may have been taken while the daemon isn't running. Devices which count steps independently will need custom code.
-    } else if (dayFileExists) {
-        lastRecordTime = QDateTime::currentDateTime();
+    if (!daemonFresh) {
+        // restarted within the same boot: the counter went on counting, the stored offset still holds
         m_stepsOffset = m_settings->value("StepCounterPrivate/stepsOffset", 0).toInt();
+        m_offsetReady = true;
+    }
+    // otherwise the offset needs the counter's value: readingReceived() sets it on the first reading
+
+    m_retryDelay = 30000;
+    m_retryTimer = new QTimer(this);
+    m_retryTimer->setSingleShot(true);
+    connect(m_retryTimer, SIGNAL(timeout()), this, SLOT(retryStart()));
+    stepcounterSensor = nullptr;
+    startSensor();
+}
+
+void StepCounterPlugin::startSensor()
+{
+    stepcounterSensor = new QStepCounterSensor(this);
+    stepcounterSensor->setAlwaysOn(true); // sensorfw stops sensors in standby (display off) otherwise
+    connect(stepcounterSensor, SIGNAL(readingChanged()), this, SLOT(readingReceived()));
+    if (stepcounterSensor->start() && stepcounterSensor->isActive()) {
+        m_retryDelay = 30000;
+        return;
+    }
+    // (this used to wait for isActive() in a busy loop, which spun a core for
+    // good when the sensor could not start, e.g. before sensorfwd was up)
+    qWarning() << "step counter did not start, retrying in" << m_retryDelay / 1000 << "s";
+    m_retryTimer->start(m_retryDelay);
+    m_retryDelay = qMin(m_retryDelay * 2, 30 * 60 * 1000);
+}
+
+void StepCounterPlugin::retryStart()
+{
+    // a sensorfw backend that failed to initialise does not try again by itself: make a new sensor
+    delete stepcounterSensor;
+    startSensor();
+}
+
+void StepCounterPlugin::readingReceived()
+{
+    if (m_offsetReady || stepcounterSensor->reading()->timestamp() == 0)
+        return;
+    int rawSteps = stepcounterSensor->reading()->steps();
+    if (dayFileExists(sensorPathPrefix)) {
+        // we reset the step count, ignoring all steps that may have been taken while the daemon isn't running. Devices which count steps independently will need custom code.
+        m_stepsOffset = rawSteps - fileGetPrevRecord(sensorPathPrefix)[1].toInt();
+    } else {
+        m_stepsOffset = m_settings->value("StepCounterPrivate/stepsOffset", 0).toInt();
+        if (m_stepsOffset > rawSteps) // the counter started again from zero with this boot
+            m_stepsOffset = 0;
     }
     m_settings->setValue("StepCounterPrivate/stepsOffset", m_stepsOffset);
+    m_offsetReady = true;
+    disconnect(stepcounterSensor, SIGNAL(readingChanged()), this, SLOT(readingReceived()));
+    qDebug() << "first step counter reading" << rawSteps << "offset" << m_stepsOffset;
 }
 
 void StepCounterPlugin::timeUpdate()
@@ -70,7 +112,7 @@ void StepCounterPlugin::triggerRecording()
 {
     qDebug() << "stepcounter interval recording";
     recordIntervalTimer->start(interval);
-    if (stepcounterSensor->reading()->timestamp() == 0) { // no sample from the sensor yet (just started; a sensor hub may still be batching)
+    if (!m_offsetReady || stepcounterSensor->reading()->timestamp() == 0) { // no sample from the sensor yet (just started; a sensor hub may still be batching)
         qDebug() << "no step counter reading yet - not recording";
         return;
     }

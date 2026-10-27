@@ -30,7 +30,16 @@ public:
 public slots:
     void triggerRecording();
 
+private slots:
+    void readingReceived();
+    void retryStart();
+
 private:
+    void startSensor();
+    bool m_daemonFresh;
+    bool m_offsetReady = false; // m_stepsOffset is known (needs a first reading after a boot)
+    int m_retryDelay;
+    QTimer *m_retryTimer;
     QDateTime lastRecordTime;
     int interval;
     QTimer *recordIntervalTimer;
