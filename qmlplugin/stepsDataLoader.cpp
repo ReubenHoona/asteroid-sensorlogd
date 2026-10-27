@@ -41,34 +41,23 @@ StepsDataLoader::StepsDataLoader() : QObject()
 
 int StepsDataLoader::getTodayTotal() {
     QSettings settings("asteroid", "sensorlogd");
-    int steps =  m_stepcounterSensor->reading()->steps();
+    // no reading before the sensor is connected (reading() is null until then)
+    QStepCounterReading *reading = m_stepcounterSensor->reading();
+    int steps = reading ? (int)reading->steps() : 0;
     if (steps < 1) {
         return getTotalForDate(QDate::currentDate());
     }
-    return steps - settings.value("StepCounterPrivate/stepsOffset", 0).toInt();
+    steps -= settings.value("StepCounterPrivate/stepsOffset", 0).toInt();
+    int logged = getTotalForDate(QDate::currentDate());
+    return steps < logged ? logged : steps; // a stale offset (counter restarted) gives less than what was logged
 }
 
 int StepsDataLoader::getTotalForDate(QDate date) { // This is obvious garbage. This should really be abstracted and cached, so that every page doesn't have to reload the file from scratch.
     // The intention is to also add graph functionality at some point. The graph will be simplifying the data before loading it in - it would be worth caching the simplified data when it comes to that as well.
 
-    QString path = fileNameForDate(date, "stepCounter");
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qDebug() << "failed to open file";
-        return 0;
-    }
-    if (!m_fileWatcher->files().contains(path)) {
-        m_fileWatcher->addPath(path);
-    }
-    QTextStream inStream(&file);
-    QString line = "0";
-    int i;
-    while (!inStream.atEnd()) {
-        line = inStream.readLine();
-        i++;
-    }
-    file.close();
-    return line.split(":")[1].toInt();
+    // the last record of the day is that day's total
+    QList<QPointF> records = getRawDataForDate(date);
+    return records.isEmpty() ? 0 : qMax(0, (int)records.last().y());
 }
 
 QVariant StepsDataLoader::getTodayData() {
@@ -80,27 +69,10 @@ QVariant StepsDataLoader::getDataForDate(QDate date) {
 }
 
 QList<QPointF> StepsDataLoader::getRawDataForDate(QDate date) {
-    QList<QPointF> m_filedata;
     QString path = fileNameForDate(date, "stepCounter");
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qDebug() << "failed to open file";
-        return m_filedata;
-    }
-    if (!m_fileWatcher->files().contains(path)) {
+    if (QFile::exists(path) && !m_fileWatcher->files().contains(path))
         m_fileWatcher->addPath(path);
-    }
-    QTextStream inStream(&file);
-    QString line;
-    while (!inStream.atEnd()) {
-        line = inStream.readLine();
-        QPointF point;
-        point.setX(line.split(":")[0].toInt());
-        point.setY(line.split(":")[1].toInt());
-        m_filedata.append(point);
-    }
-    file.close();
-    return m_filedata;
+    return readDayRecords(path);
 }
 
 QVariant StepsDataLoader::getDataFromTo(QDate date1, QDate date2) {
@@ -111,7 +83,6 @@ QVariant StepsDataLoader::getDataFromTo(QDate date1, QDate date2) {
         date2 = temp;
     }
     for (QDate i = date1; i <= date2; i = i.addDays(1)) {
-        qDebug() << "currently loading " << i;
         QList<QPointF> data = getRawDataForDate(i);
         if (filedata.count() == 0) {
             filedata = data;

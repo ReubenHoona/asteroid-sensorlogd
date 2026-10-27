@@ -43,27 +43,10 @@ QVariant BarometerDataLoader::getDataForDate(QDate date) {
 }
 
 QList<QPointF> BarometerDataLoader::getRawDataForDate(QDate date) {
-    QList<QPointF> m_filedata;
     QString path = fileNameForDate(date, "barometer-compensated");
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qDebug() << "failed to open file";
-        return m_filedata;
-    }
-    if (!m_fileWatcher->files().contains(path)) {
+    if (QFile::exists(path) && !m_fileWatcher->files().contains(path))
         m_fileWatcher->addPath(path);
-    }
-    QTextStream inStream(&file);
-    QString line;
-    while (!inStream.atEnd()) {
-        line = inStream.readLine();
-        QPointF point;
-        point.setX(line.split(":")[0].toInt());
-        point.setY(line.split(":")[1].toInt());
-        m_filedata.append(point);
-    }
-    file.close();
-    return m_filedata;
+    return readDayRecords(path);
 }
 
 QVariant BarometerDataLoader::getDataFromTo(QDate date1, QDate date2) {
@@ -74,7 +57,6 @@ QVariant BarometerDataLoader::getDataFromTo(QDate date1, QDate date2) {
         date2 = temp;
     }
     for (QDate i = date1; i <= date2; i = i.addDays(1)) {
-        qDebug() << "currently loading " << i;
         QList<QPointF> data = getRawDataForDate(i);
         if (filedata.count() == 0) {
             filedata = data;

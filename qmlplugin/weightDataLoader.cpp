@@ -40,23 +40,7 @@ QVariant WeightDataLoader::getDataForDate(QDate date) {
 }
 
 QList<QPointF> WeightDataLoader::getRawDataForDate(QDate date) {
-    QList<QPointF> m_filedata;
-    QFile file(fileNameForDate(date, "weight"));
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qDebug() << "failed to open file";
-        return m_filedata;
-    }
-    QTextStream inStream(&file);
-    QString line;
-    while (!inStream.atEnd()) {
-        line = inStream.readLine();
-        QPointF point;
-        point.setX(line.split(":")[0].toInt());
-        point.setY(line.split(":")[1].toFloat());
-        m_filedata.append(point);
-    }
-    file.close();
-    return m_filedata;
+    return readDayRecords(fileNameForDate(date, "weight"));
 }
 
 QVariant WeightDataLoader::getDataFromTo(QDate date1, QDate date2) {
@@ -67,7 +51,6 @@ QVariant WeightDataLoader::getDataFromTo(QDate date1, QDate date2) {
         date2 = temp;
     }
     for (QDate i = date1; i <= date2; i = i.addDays(1)) {
-        qDebug() << "currently loading " << i;
         QList<QPointF> data = getRawDataForDate(i);
         if (filedata.count() == 0) {
             filedata = data;
