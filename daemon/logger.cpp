@@ -34,6 +34,12 @@ Logger::Logger(QObject *parent)  :
     if(!QDBusConnection::sessionBus().registerService("org.asteroid.sensorlogd.logger")) qDebug() << "failed to register service";
     if(!QDBusConnection::sessionBus().registerObject("/org/asteroid/sensorlogd/logger", this, QDBusConnection::ExportAllContents)) qDebug() << "failed to register object";
 
+    settings = new QSettings(this);
+    // mce's display state; connected by name, so it works whether or not mce is up yet
+    if (!QDBusConnection::systemBus().connect("com.nokia.mce", "/com/nokia/mce/signal", "com.nokia.mce.signal",
+                                              "display_status_ind", this, SLOT(displayOn(QString))))
+        qDebug() << "failed to connect to mce's display_status_ind";
+
     // QtSensors' sensorfw backend gives up for good on a sensor that is made
     // before sensorfwd's D-Bus service exists ("There is no sensor manager
     // yet"), so the sensors are set up only once the service is there. A later
@@ -56,8 +62,14 @@ void Logger::sensorfwRegistered() {
 
 void Logger::setup() {
     m_setupDone = true;
-    m_iface = new QDBusInterface("com.nokia.mce","/com/nokia/mce/signal", "com.nokia.mce.signal", QDBusConnection::systemBus());
-    settings = new QSettings;
+    // resetup(): replace the sensors rather than add a second set next to them
+    delete m_heartrateSensor;
+    m_heartrateSensor = nullptr;
+    delete m_stepCounter;
+    m_stepCounter = nullptr;
+    delete m_barometerSensor;
+    m_barometerSensor = nullptr;
+    settings->sync(); // the settings app wrote the file
     daemonFresh = getDaemonFresh();
 
     heartrateSensorEnabled = this->settings->value("heartrateSensor/enabled",true).toBool();
@@ -80,13 +92,6 @@ void Logger::setup() {
         m_barometerSensor = new BarometerSensorPlugin(this,settings->value("barometer/interval",600000).toInt());
     }
 
-    if(!m_iface->isValid()) {
-	    qDebug() << "interface is not valid";
-	    qDebug() << m_iface->lastError();
-    }
-    if(connect(m_iface, SIGNAL(display_status_ind(QString)), this, SLOT(displayOn(QString)))) { //this fires when the display turns on
-	    qDebug() << "connected display_status signal to slot";
-    }
     qDebug() << "sensorlogd setup complete";
     this->triggerRecording();
 }
@@ -159,19 +164,21 @@ QStringList fileGetPrevRecord(QString sensorPrefix, QDateTime recordTime) {
     QFile file(fileNameForDate(recordTime.date(), sensorPrefix));
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         qDebug() << "failed to open file";
-        return {0,0};
+        return {"0", "0"};
     }
     QTextStream inStream(&file);
     QString line;
-    int i;
     while(!inStream.atEnd())
     {
-        line = inStream.readLine();
-        qDebug() << line;
-        i++;
+        QString next = inStream.readLine();
+        if (!next.isEmpty())
+            line = next;
     }
     file.close();
-    return line.split(":");
+    QStringList record = line.split(":");
+    if (record.size() < 2) // empty file or a torn last line: callers read [1]
+        return {"0", "0"};
+    return record;
 }
 
 
