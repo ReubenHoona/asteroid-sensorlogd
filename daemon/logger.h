@@ -19,6 +19,7 @@
 #include <QString>
 #include <QSettings>
 #include <QDBusAbstractAdaptor>
+#include <QDBusServiceWatcher>
 
 #include "sensorPlugins/stepCounter.h"
 #include "sensorPlugins/heartrateSensor.h"
@@ -36,8 +37,11 @@ public slots:
     void triggerRecording();
 private slots:
     void displayOn(QString displayState);
+    void sensorfwRegistered();
 
 private:
+    QDBusServiceWatcher *m_sensorfwWatcher;
+    bool m_setupDone = false;
     QDBusInterface *m_iface;
     bool heartrateSensorEnabled = false;
     HeartrateSensorPlugin *m_heartrateSensor;

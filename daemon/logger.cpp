@@ -12,6 +12,7 @@
 #include <QSettings>
 #include <QDBusInterface>
 #include <QDBusConnection>
+#include <QDBusConnectionInterface>
 #include <QDateTime>
 #include <QFile>
 #include <QTextStream>
@@ -26,14 +27,35 @@
 #include "sensorPlugins/heartrateSensor.h"
 #include "sensorPlugins/barometerSensor.h"
 
+static const QString sensorfwService = QStringLiteral("com.nokia.SensorService");
+
 Logger::Logger(QObject *parent)  :
     QObject(parent){
     if(!QDBusConnection::sessionBus().registerService("org.asteroid.sensorlogd.logger")) qDebug() << "failed to register service";
     if(!QDBusConnection::sessionBus().registerObject("/org/asteroid/sensorlogd/logger", this, QDBusConnection::ExportAllContents)) qDebug() << "failed to register object";
+
+    // QtSensors' sensorfw backend gives up for good on a sensor that is made
+    // before sensorfwd's D-Bus service exists ("There is no sensor manager
+    // yet"), so the sensors are set up only once the service is there. A later
+    // sensorfwd restart is handled by the backend itself.
+    m_sensorfwWatcher = new QDBusServiceWatcher(sensorfwService, QDBusConnection::systemBus(),
+                                                QDBusServiceWatcher::WatchForRegistration, this);
+    connect(m_sensorfwWatcher, &QDBusServiceWatcher::serviceRegistered, this, &Logger::sensorfwRegistered);
+    if (QDBusConnection::systemBus().interface()->isServiceRegistered(sensorfwService).value())
+        this->setup();
+    else
+        qDebug() << "waiting for" << sensorfwService;
+}
+
+void Logger::sensorfwRegistered() {
+    if (m_setupDone)
+        return;
+    qDebug() << sensorfwService << "is up";
     this->setup();
 }
 
 void Logger::setup() {
+    m_setupDone = true;
     m_iface = new QDBusInterface("com.nokia.mce","/com/nokia/mce/signal", "com.nokia.mce.signal", QDBusConnection::systemBus());
     settings = new QSettings;
     daemonFresh = getDaemonFresh();
@@ -70,6 +92,8 @@ void Logger::setup() {
 }
 
 void Logger::resetup() {
+    if (!m_setupDone) // still waiting for sensorfwd; setup() reads the new settings then
+        return;
     this->setup();
 }
 
