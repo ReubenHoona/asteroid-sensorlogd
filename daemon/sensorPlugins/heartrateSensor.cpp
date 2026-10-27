@@ -76,11 +76,12 @@ void HeartrateSensorPlugin::triggerRecording() {
 }
 
 void HeartrateSensorPlugin::finishRecording() {
-    qDebug() << "bpm update received";
     int bpm = hrmSensor->reading()->bpm();
-    qDebug() << QDateTime::currentDateTime().toString("hh:mm:ss") << " : " << bpm << hrmSensor->status() << hrmSensor->isActive();
+    if (!continuous) // continuous mode: a reading every second, around the clock; no journal lines for each
+        qDebug() << "bpm update received" << QDateTime::currentDateTime().toString("hh:mm:ss") << " : " << bpm << hrmSensor->status() << hrmSensor->isActive();
     if ((bpm == 0) || (hrmSensor->status() < 3)) {
-        qDebug() << "hrm sensor accuracy insufficient. waiting.";
+        if (!continuous)
+            qDebug() << "hrm sensor accuracy insufficient. waiting.";
         return;
     }
     if (continuous) {
