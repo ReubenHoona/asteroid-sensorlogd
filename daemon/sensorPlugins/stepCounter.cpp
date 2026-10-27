@@ -40,11 +40,13 @@ StepCounterPlugin::StepCounterPlugin(QObject* parent, int initInterval, bool dae
     setupFilePath(sensorPathPrefix);
 
     if (!daemonFresh) {
-        // restarted within the same boot: the counter went on counting, the stored offset still holds
+        // restarted within the same boot: the counter went on counting, so the
+        // stored offset holds - unless it is above the counter (checked on the
+        // first reading)
         m_stepsOffset = m_settings->value("StepCounterPrivate/stepsOffset", 0).toInt();
-        m_offsetReady = true;
+        m_storedOffset = true;
     }
-    // otherwise the offset needs the counter's value: readingReceived() sets it on the first reading
+    // the offset is settled by readingReceived() on the first reading
 
     m_retryDelay = 30000;
     m_retryTimer = new QTimer(this);
@@ -77,12 +79,40 @@ void StepCounterPlugin::retryStart()
     startSensor();
 }
 
+void StepCounterPlugin::saveOffset()
+{
+    m_settings->setValue("StepCounterPrivate/stepsOffset", m_stepsOffset);
+}
+
 void StepCounterPlugin::readingReceived()
 {
-    if (m_offsetReady || stepcounterSensor->reading()->timestamp() == 0)
+    QStepCounterReading *reading = stepcounterSensor->reading();
+    if (!reading || reading->timestamp() == 0)
         return;
-    int rawSteps = stepcounterSensor->reading()->steps();
-    if (dayFileExists(sensorPathPrefix)) {
+    int rawSteps = reading->steps();
+    if (m_offsetReady) {
+        // The counter is cumulative; a lower value means it started again from
+        // zero (sensor hub reset or firmware reload, sensorfwd restart). Carry
+        // on from the count so far instead of computing negative steps, which
+        // were never recorded ("offset value is less than previous value")
+        // until the next midnight. A zero is not trusted as a restart.
+        if (rawSteps > 0) {
+            if (rawSteps < m_lastRawSteps) {
+                m_stepsOffset -= m_lastRawSteps;
+                saveOffset();
+                qWarning() << "step counter started again at" << rawSteps << "(was" << m_lastRawSteps << "), offset now" << m_stepsOffset;
+            }
+            m_lastRawSteps = rawSteps;
+        }
+        return;
+    }
+    m_lastRawSteps = rawSteps;
+    if (m_storedOffset && m_stepsOffset <= rawSteps) {
+        // same boot, the counter went on: keep the stored offset
+    } else if (dayFileExists(sensorPathPrefix)) {
+        // (also a stored offset above the counter: it was stored for another
+        // count, e.g. by the previous boot when this boot's first daemon never
+        // got a reading, and gave negative steps for the rest of the day)
         // we reset the step count, ignoring all steps that may have been taken while the daemon isn't running. Devices which count steps independently will need custom code.
         m_stepsOffset = rawSteps - fileGetPrevRecord(sensorPathPrefix)[1].toInt();
     } else {
@@ -90,9 +120,8 @@ void StepCounterPlugin::readingReceived()
         if (m_stepsOffset > rawSteps) // the counter started again from zero with this boot
             m_stepsOffset = 0;
     }
-    m_settings->setValue("StepCounterPrivate/stepsOffset", m_stepsOffset);
+    saveOffset();
     m_offsetReady = true;
-    disconnect(stepcounterSensor, SIGNAL(readingChanged()), this, SLOT(readingReceived()));
     qDebug() << "first step counter reading" << rawSteps << "offset" << m_stepsOffset;
 }
 
@@ -117,6 +146,10 @@ void StepCounterPlugin::triggerRecording()
         return;
     }
     int rawSteps = stepcounterSensor->reading()->steps();
+    if (rawSteps < m_lastRawSteps) { // a zero (or not yet the restarted counter's new value): see readingReceived()
+        qDebug() << "step counter reads" << rawSteps << "below" << m_lastRawSteps << "- not recording";
+        return;
+    }
     if (lastRecordTime.date() != QDate::currentDate()) { // ok, so the date has changed.
         if (dayFileExists(sensorPathPrefix)) { // this likely means we have just had a system time change
             QStringList lastLineData = fileGetPrevRecord(sensorPathPrefix);

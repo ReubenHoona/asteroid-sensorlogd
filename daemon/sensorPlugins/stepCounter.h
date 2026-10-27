@@ -37,7 +37,10 @@ private slots:
 private:
     void startSensor();
     bool m_daemonFresh;
-    bool m_offsetReady = false; // m_stepsOffset is known (needs a first reading after a boot)
+    bool m_offsetReady = false; // m_stepsOffset is known (needs a first reading)
+    bool m_storedOffset = false; // m_stepsOffset was read from the settings (restart within the same boot)
+    int m_lastRawSteps = 0; // the counter's last non-zero value, to notice it starting again
+    void saveOffset();
     int m_retryDelay;
     QTimer *m_retryTimer;
     QDateTime lastRecordTime;
