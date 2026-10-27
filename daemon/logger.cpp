@@ -284,17 +284,21 @@ QStringList fileGetPrevRecord(QString sensorPrefix, QDateTime recordTime) {
         return {"0", "0"};
     }
     QTextStream inStream(&file);
-    QString line;
+    // the last valid record: callers read [1], and a torn or zero-filled
+    // last line (power loss mid-write) must not hide the day's real last one
+    QStringList record = {"0", "0"};
     while(!inStream.atEnd())
     {
-        QString next = inStream.readLine();
-        if (!next.isEmpty())
-            line = next;
+        const QStringList fields = inStream.readLine().split(":");
+        bool timeOk = false, valueOk = false;
+        if (fields.size() == 2) {
+            fields[0].toLongLong(&timeOk);
+            fields[1].toInt(&valueOk);
+        }
+        if (timeOk && valueOk)
+            record = fields;
     }
     file.close();
-    QStringList record = line.split(":");
-    if (record.size() < 2) // empty file or a torn last line: callers read [1]
-        return {"0", "0"};
     return record;
 }
 
