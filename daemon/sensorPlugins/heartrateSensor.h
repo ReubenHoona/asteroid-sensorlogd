@@ -33,6 +33,7 @@ public slots:
 private slots:
     void finishRecording();
     void abortRecording();
+    void retryContinuous();
 
 private:
     QDateTime lastRecordTime;
@@ -40,6 +41,12 @@ private:
     QTimer *recordIntervalTimer;
     QTimer *recordTimeoutTimer;
     QHrmSensor *hrmSensor;
+    void makeSensor();
+    bool startSensor();
+    QTimer *m_retryTimer; // continuous mode: start again after a failed start
+    int m_retryDelay = 30000;
+    int m_readings = 0; // interval mode: readings and the best status seen in this recording
+    int m_bestStatus = -1;
 
     // continuous mode: the sensor stays on (a sensor hub can batch the samples
     // while the system sleeps) and one average per minute is logged

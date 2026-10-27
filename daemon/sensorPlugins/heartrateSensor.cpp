@@ -26,9 +26,11 @@ HeartrateSensorPlugin::HeartrateSensorPlugin(QObject *parent, int initInterval, 
     interval = initInterval;
     continuous = initContinuous;
 
-    hrmSensor = new QHrmSensor(this);
-    hrmSensor->setAlwaysOn(true); // sensorfw stops sensors in standby (display off) otherwise
-    connect(hrmSensor,SIGNAL(readingChanged()),this,SLOT(finishRecording()));
+    hrmSensor = nullptr;
+    makeSensor();
+    m_retryTimer = new QTimer(this);
+    m_retryTimer->setSingleShot(true);
+    connect(m_retryTimer, SIGNAL(timeout()), this, SLOT(retryContinuous()));
 
     setupFilePath(sensorPathPrefix);
 
@@ -49,8 +51,40 @@ HeartrateSensorPlugin::HeartrateSensorPlugin(QObject *parent, int initInterval, 
     if (continuous) {
         qDebug() << "heartrate sensor is continuous";
         recordIntervalTimer->stop();
-        hrmSensor->start();
+        retryContinuous();
     }
+}
+
+void HeartrateSensorPlugin::makeSensor() {
+    delete hrmSensor;
+    hrmSensor = new QHrmSensor(this);
+    hrmSensor->setAlwaysOn(true); // sensorfw stops sensors in standby (display off) otherwise
+    connect(hrmSensor,SIGNAL(readingChanged()),this,SLOT(finishRecording()));
+}
+
+// QtSensors' sensorfw backend does not set up a sensor again by itself once
+// its first set-up failed (sensorfwd not ready, heart rate not listed by the
+// hub yet), so start() kept failing quietly at every recording. Make a new
+// sensor when a start fails.
+bool HeartrateSensorPlugin::startSensor() {
+    if (hrmSensor->start())
+        return true;
+    qWarning() << "heart rate sensor did not start, making it again";
+    makeSensor();
+    if (hrmSensor->start())
+        return true;
+    qWarning() << "heart rate sensor still does not start";
+    return false;
+}
+
+void HeartrateSensorPlugin::retryContinuous() {
+    if (startSensor()) {
+        m_retryDelay = 30000;
+        return;
+    }
+    qWarning() << "continuous heart rate: retrying in" << m_retryDelay / 1000 << "s";
+    m_retryTimer->start(m_retryDelay);
+    m_retryDelay = qMin(m_retryDelay * 2, 30 * 60 * 1000);
 }
 
 void HeartrateSensorPlugin::timeUpdate() {
@@ -71,14 +105,21 @@ void HeartrateSensorPlugin::triggerRecording() {
     qDebug() << "heartrate interval recording";
     recordIntervalTimer->start(interval);
     lastRecordTime = QDateTime::currentDateTime();
+    m_readings = 0;
+    m_bestStatus = -1;
+    if (!startSensor())
+        return; // tried again at the next recording
     recordTimeoutTimer->start();
-    hrmSensor->start();
 }
 
 void HeartrateSensorPlugin::finishRecording() {
     int bpm = hrmSensor->reading()->bpm();
     if (!continuous) // continuous mode: a reading every second, around the clock; no journal lines for each
         qDebug() << "bpm update received" << QDateTime::currentDateTime().toString("hh:mm:ss") << " : " << bpm << hrmSensor->status() << hrmSensor->isActive();
+    if (!continuous) {
+        m_readings++;
+        m_bestStatus = qMax(m_bestStatus, (int)hrmSensor->status());
+    }
     if ((bpm == 0) || (hrmSensor->status() < 3)) {
         if (!continuous)
             qDebug() << "hrm sensor accuracy insufficient. waiting.";
@@ -94,7 +135,9 @@ void HeartrateSensorPlugin::finishRecording() {
 }
 
 void HeartrateSensorPlugin::abortRecording() {
-    qDebug() << "no usable heartrate reading, stopping until the next recording";
+    // status: 0 no contact, 1 unreliable, 2 low, 3 medium, 4 high; >= 3 is recorded
+    qWarning() << "no usable heartrate reading in" << recordTimeoutTimer->interval() / 1000 << "s:"
+               << m_readings << "readings, best status" << m_bestStatus << "- stopping until the next recording";
     hrmSensor->stop();
 }
 
