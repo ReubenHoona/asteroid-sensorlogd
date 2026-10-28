@@ -147,6 +147,8 @@ void StepCounterPlugin::readingReceived()
             m_lastRawSteps = rawSteps;
         settleOffset(rawSteps);
     } else {
+        if (taken < m_lastReadingMs)
+            return; // older than what was counted already (a replayed reading): changes nothing
         const QDate takenDay = QDateTime::fromMSecsSinceEpoch(taken).date();
         if (takenDay > m_day)
             newDay(takenDay);
@@ -161,6 +163,23 @@ void StepCounterPlugin::readingReceived()
         }
         if (rawSteps > 0)
             m_lastRawSteps = rawSteps;
+        if (takenDay < m_day) {
+            // Taken before the current day began, delivered after the day
+            // changed (a hub batch that came only after the day was changed):
+            // these steps belong to that day, and the current day starts
+            // after them. Counted to the current day they were written into
+            // the earlier day's file as a small count, read as its total.
+            m_lastReadingMs = taken;
+            if (rawSteps > m_stepsOffset) {
+                const int dayTotal = qMax(0, fileGetPrevRecord(sensorPathPrefix,
+                                                               QDateTime(takenDay, QTime(23, 59, 59)))[1].toInt());
+                fileAddRecord(sensorPathPrefix, QString::number(dayTotal + rawSteps - m_stepsOffset),
+                              QDateTime::fromMSecsSinceEpoch(taken));
+                m_stepsOffset = rawSteps;
+                saveOffset();
+            }
+            return;
+        }
     }
     if (taken < m_lastReadingMs)
         return; // older than what was counted already (a replayed reading)
@@ -196,13 +215,28 @@ void StepCounterPlugin::batchIdle()
 {
     // the newest count of the batch, so the day file is current
     writePending();
+    if (m_dayChangePending) {
+        // no step since midnight: today starts at the last count
+        m_dayChangePending = false;
+        if (m_offsetReady && QDate::currentDate() > m_day)
+            newDay(QDate::currentDate());
+    }
 }
 
 void StepCounterPlugin::timeUpdate()
 {
-    if (m_offsetReady && QDate::currentDate() > m_day)
-        newDay(QDate::currentDate()); // no step since midnight: today starts at the last count
     writePending();
+    if (m_offsetReady && QDate::currentDate() > m_day) {
+        // Not at once: the display came on, and the sensor hub hands over
+        // what it batched before midnight only now (sensorfwd flushes it on
+        // the same mce signal; it arrives after this). A new day started
+        // from the last count seen here would count those steps to today and
+        // write them into the previous day's file as its total. Once the
+        // batch is over (or none came), the day changes at the last count.
+        m_dayChangePending = true;
+        if (!m_idleTimer->isActive())
+            m_idleTimer->start();
+    }
 }
 
 void StepCounterPlugin::triggerRecording()

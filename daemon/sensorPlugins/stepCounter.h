@@ -68,6 +68,7 @@ private:
     int m_pendingSteps = -1;    // newest count not written yet (-1: none)
     qint64 m_pendingMs = 0;
     int m_writtenSteps = -1;    // the count last written
+    bool m_dayChangePending = false; // display on in a new day: change it once the batch is in
     qint64 m_lastReadingMs = 0; // newest reading taken into account
     QSettings *m_settings;
 
