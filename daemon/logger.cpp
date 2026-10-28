@@ -19,12 +19,6 @@
 #include <QTimer>
 #include <QDebug>
 #include <QStandardPaths>
-#include <QDBusMessage>
-#include <QDBusPendingCall>
-#include <QDBusPendingCallWatcher>
-#include <QDBusPendingReply>
-
-#include <backgroundactivity.h>
 
 #include "logger.h"
 #include "../common.h"
@@ -35,16 +29,6 @@
 
 static const QString sensorfwService = QStringLiteral("com.nokia.SensorService");
 
-// the eos sensor hub plugin (libusfhub-qt6 in sensorfwd): hands over the
-// samples the hub batched while the display was off
-static const QString usfHubPath = QStringLiteral("/org/eos/usfhub");
-static const QString usfHubInterface = QStringLiteral("org.eos.UsfHub");
-
-static const int WAKE_FLUSH_SETTLE_MS = 1500; // FLUSH -> the batch is with sensorfwd's clients
-static const int WAKE_LIMIT_MS = 15000;       // longest a wake keeps the system up
-static const int WAKE_POLL_MS = 250;
-static const int WAKE_HR_SECOND_S = 60;       // interval heart rate: read the batch this much later
-
 Logger::Logger(QObject *parent)  :
     QObject(parent){
     if(!QDBusConnection::sessionBus().registerService("org.asteroid.sensorlogd.logger")) qDebug() << "failed to register service";
@@ -52,17 +36,6 @@ Logger::Logger(QObject *parent)  :
 
     settings = new QSettings(this);
 
-    m_wake = new BackgroundActivity(this);
-    connect(m_wake, &BackgroundActivity::running, this, &Logger::wakeRunning);
-    m_wakeSettle = new QTimer(this);
-    m_wakeSettle->setSingleShot(true);
-    connect(m_wakeSettle, &QTimer::timeout, this, &Logger::wakeWork);
-    m_wakePoll = new QTimer(this);
-    m_wakePoll->setSingleShot(true);
-    connect(m_wakePoll, &QTimer::timeout, this, &Logger::wakeCheckDone);
-    m_wakeLimit = new QTimer(this);
-    m_wakeLimit->setSingleShot(true);
-    connect(m_wakeLimit, &QTimer::timeout, this, &Logger::wakeDone);
     // mce's display state; connected by name, so it works whether or not mce is up yet
     if (!QDBusConnection::systemBus().connect("com.nokia.mce", "/com/nokia/mce/signal", "com.nokia.mce.signal",
                                               "display_status_ind", this, SLOT(displayOn(QString))))
@@ -81,6 +54,12 @@ Logger::Logger(QObject *parent)  :
         qDebug() << "waiting for" << sensorfwService;
 }
 
+Logger::~Logger()
+{
+    // the plugins write what they collected; before settings goes
+    deletePlugins();
+}
+
 void Logger::sensorfwRegistered() {
     if (m_setupDone)
         return;
@@ -88,15 +67,19 @@ void Logger::sensorfwRegistered() {
     this->setup();
 }
 
-void Logger::setup() {
-    m_setupDone = true;
-    // resetup(): replace the sensors rather than add a second set next to them
+void Logger::deletePlugins() {
     delete m_heartrateSensor;
     m_heartrateSensor = nullptr;
     delete m_stepCounter;
     m_stepCounter = nullptr;
     delete m_barometerSensor;
     m_barometerSensor = nullptr;
+}
+
+void Logger::setup() {
+    m_setupDone = true;
+    // resetup(): replace the sensors rather than add a second set next to them
+    deletePlugins();
     settings->sync(); // the settings app wrote the file
     daemonFresh = getDaemonFresh();
 
@@ -104,113 +87,22 @@ void Logger::setup() {
     stepCounterEnabled = this->settings->value("stepCounter/enabled",true).toBool();
     barometerEnabled = this->settings->value("barometer/enabled",true).toBool();
 
-//intialise HRM
+    // heart rate: one record per interval at rest (Wear OS-like, 5-10 min)
     if (heartrateSensorEnabled) {
-        m_heartrateSensor = new HeartrateSensorPlugin(this,settings->value("heartrateSensor/interval",600000).toInt(),
-                                                      settings->value("heartrateSensor/continuous",false).toBool());
+        m_heartrateSensor = new HeartrateSensorPlugin(this, settings, settings->value("heartrateSensor/interval",600000).toInt());
     }
 
-//initialise step counter
     if (stepCounterEnabled) {
         m_stepCounter = new StepCounterPlugin(this,settings->value("stepCounter/interval",600000).toInt(),daemonFresh);
     }
 
-//initialise barometer
     if (barometerEnabled) {
         m_barometerSensor = new BarometerSensorPlugin(this,settings->value("barometer/interval",600000).toInt());
     }
 
-    // one system wake for every sensor: the shortest interval, at the
-    // earliest; iphb may align it with other wakes up to half an interval later
-    int wakeMs = 0;
-    if (heartrateSensorEnabled && !settings->value("heartrateSensor/continuous",false).toBool())
-        wakeMs = settings->value("heartrateSensor/interval",600000).toInt();
-    if (heartrateSensorEnabled && settings->value("heartrateSensor/continuous",false).toBool())
-        wakeMs = 600000; // continuous: collect the batch every 10 min
-    if (stepCounterEnabled) {
-        int ms = settings->value("stepCounter/interval",600000).toInt();
-        wakeMs = wakeMs ? qMin(wakeMs, ms) : ms;
-    }
-    if (barometerEnabled) {
-        int ms = settings->value("barometer/interval",600000).toInt();
-        wakeMs = wakeMs ? qMin(wakeMs, ms) : ms;
-    }
-    m_wakeInterval = qMax(60, wakeMs / 1000);
-
     qDebug() << "sensorlogd setup complete";
-    this->triggerRecording();
-    if (heartrateSensorEnabled && m_heartrateSensor->measuring())
-        scheduleWake(WAKE_HR_SECOND_S);
-    else if (heartrateSensorEnabled || stepCounterEnabled || barometerEnabled)
-        scheduleWake(m_wakeInterval);
-    else
-        m_wake->stop();
-}
-
-void Logger::scheduleWake(int seconds) {
-    // also ends a running wake: the keepalive stops once the next wake is armed
-    m_wakeSettle->stop();
-    m_wakePoll->stop();
-    m_wakeLimit->stop();
-    // a new range only takes effect on a state change (libkeepalive)
-    if (m_wake->isWaiting())
-        m_wake->stop();
-    m_wake->wait(seconds, seconds + seconds / 2);
-}
-
-void Logger::flushHub() {
-    QDBusMessage m = QDBusMessage::createMethodCall(sensorfwService, usfHubPath, usfHubInterface,
-                                                    QStringLiteral("Flush"));
-    QDBusPendingCallWatcher *w = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(m, 3000), this);
-    connect(w, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *pw) {
-        QDBusPendingReply<int> r = *pw;
-        if (r.isError() && !m_flushWarned) {
-            // an older sensor hub plugin: the hub hands its batch over on its own latency
-            qWarning() << "sensor hub flush not available:" << r.error().message();
-            m_flushWarned = true;
-        }
-        pw->deleteLater();
-    });
-}
-
-void Logger::wakeRunning() {
-    // The system woke for us (mce cpu keepalive held): get the hub's batch
-    // first, then record what is due
-    m_wakeLimit->start(WAKE_LIMIT_MS);
-    flushHub();
-    m_wakeSettle->start(WAKE_FLUSH_SETTLE_MS);
-}
-
-void Logger::wakeWork() {
-    if (heartrateSensorEnabled)
-        m_heartrateSensor->wakeUpdate();
-    if (stepCounterEnabled)
-        m_stepCounter->timeUpdate();
     if (barometerEnabled)
-        m_barometerSensor->timeUpdate();
-    wakeCheckDone();
-}
-
-void Logger::wakeCheckDone() {
-    // the barometer gives a reading within a second or two: wait for it
-    // (bounded by m_wakeLimit); heart rate is read from the batch at a second wake
-    if (barometerEnabled && m_barometerSensor->measuring()) {
-        m_wakePoll->start(WAKE_POLL_MS);
-        return;
-    }
-    wakeDone();
-}
-
-void Logger::wakeDone() {
-    if (!m_wake->isRunning())
-        return;
-    // the limit came first: do not leave the barometer on until the next wake
-    if (barometerEnabled && m_barometerSensor->measuring())
-        m_barometerSensor->abortRecording();
-    if (heartrateSensorEnabled && m_heartrateSensor->measuring())
-        scheduleWake(WAKE_HR_SECOND_S);
-    else
-        scheduleWake(m_wakeInterval);
+        m_barometerSensor->triggerRecording();
 }
 
 void Logger::resetup() {
@@ -222,8 +114,9 @@ void Logger::resetup() {
 void Logger::displayOn(QString displayState) {
     if (displayState == "off")
         return;
+    // the system is awake anyway: the sensor hub hands over its batch now
+    // (the eos hub plugin flushes at display on); write what is due
     qDebug() << "display on detected";
-    uint currTime = QDateTime::currentMSecsSinceEpoch();
 
     if (heartrateSensorEnabled) {
         m_heartrateSensor->timeUpdate();
@@ -301,6 +194,3 @@ QStringList fileGetPrevRecord(QString sensorPrefix, QDateTime recordTime) {
     file.close();
     return record;
 }
-
-
-

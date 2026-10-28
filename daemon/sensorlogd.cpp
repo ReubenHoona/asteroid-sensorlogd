@@ -8,10 +8,25 @@
  * You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <signal.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include <QCoreApplication>
 #include <QDBusConnection>
 #include <QDebug>
+#include <QSocketNotifier>
 #include "logger.h"
+
+static int quitPipe[2] = { -1, -1 };
+
+static void onQuitSignal(int)
+{
+    char c = 1;
+    if (write(quitPipe[1], &c, 1) < 0) {
+        // nothing to do in a signal handler
+    }
+}
 
 int main(int argc, char **argv)
 {
@@ -27,6 +42,18 @@ int main(int argc, char **argv)
     QCoreApplication::setOrganizationName("asteroid");
     QCoreApplication::setOrganizationDomain("asteroidos.org");
     QCoreApplication::setApplicationName("sensorlogd");
+
+    // systemd stops the daemon with SIGTERM: quit the event loop, so the
+    // plugins write the readings they collected but did not log yet
+    if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, quitPipe) == 0) {
+        QSocketNotifier *n = new QSocketNotifier(quitPipe[0], QSocketNotifier::Read, &qcoreapp);
+        QObject::connect(n, &QSocketNotifier::activated, &qcoreapp, &QCoreApplication::quit);
+        struct sigaction sa = {};
+        sa.sa_handler = onQuitSignal;
+        sigaction(SIGTERM, &sa, nullptr);
+        sigaction(SIGINT, &sa, nullptr);
+    }
+
     Logger sensorsLogger;
     qDebug() << "sensorlogd starting";
     qcoreapp.exec();

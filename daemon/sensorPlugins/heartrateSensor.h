@@ -13,54 +13,65 @@
 
 #include <QObject>
 #include <QDateTime>
-#include <QDBusInterface>
 #include <QTimer>
+#include <QVector>
 
 #include <QtSensors/QHrmSensor>
 
+class QSettings;
+
+/*
+ * Heart rate, measured all the time by the sensor (on eos: the sensor hub
+ * runs the algorithm and batches the readings while the system sleeps, as
+ * on Wear OS). The sensor is started once and stays on; readings arrive
+ * live or in batches, each with the time it was taken. One record per
+ * interval (heartrateSensor/interval) is written, dated by its reading: the
+ * median usable reading of that interval. When the heart rate moves within
+ * an interval (activity: more than heartrateSensor/activeSpread bpm between
+ * its lowest and highest reading) a record per minute is written instead.
+ * Nothing here wakes the system: records are written when readings arrive.
+ */
 class HeartrateSensorPlugin : public QObject
 {
     Q_OBJECT
 public:
-    explicit HeartrateSensorPlugin(QObject *parent = 0, int initInterval = 600000, bool continuous = false);
-    virtual ~HeartrateSensorPlugin() {};
+    explicit HeartrateSensorPlugin(QObject *parent, QSettings *settings, int interval);
+    virtual ~HeartrateSensorPlugin();
 
+    // the system is awake anyway (display on): close an interval that is over
     void timeUpdate();
-    // at a periodic system wake, after the hub's batch was handed over
-    void wakeUpdate();
-    // an interval recording is waiting for a usable reading
-    bool measuring() const { return m_measuring; }
 
 public slots:
     void triggerRecording();
 
 private slots:
-    void finishRecording();
-    void abortRecording();
-    void retryContinuous();
+    void readingReceived();
+    void retryStart();
+    void batchIdle();
 
 private:
-    QDateTime lastRecordTime;
-    int interval;
-    QTimer *recordIntervalTimer;
-    QTimer *recordTimeoutTimer;
-    QHrmSensor *hrmSensor;
-    bool m_measuring = false;
-    qint64 m_startedMs = 0;     // wall clock, when the recording started
+    struct Sample {
+        qint64 takenMs; // wall clock of the reading
+        int bpm;
+    };
     void makeSensor();
-    bool startSensor();
-    QTimer *m_retryTimer; // continuous mode: start again after a failed start
-    int m_retryDelay = 30000;
-    int m_readings = 0; // interval mode: readings and the best status seen in this recording
-    int m_bestStatus = -1;
+    void startSensor();
+    void closeInterval();
+    void writeRecord(const QVector<Sample> &samples);
 
-    // continuous mode: the sensor stays on (a sensor hub can batch the samples
-    // while the system sleeps) and one average per minute is logged
-    void addContinuousSample(int bpm);
-    bool continuous;
-    qint64 minuteStart = 0;
-    int minuteSum = 0;
-    int minuteCount = 0;
+    QSettings *m_settings;
+    QHrmSensor *m_sensor = nullptr;
+    QTimer *m_retryTimer;
+    int m_retryDelay = 30000;
+    QTimer *m_idleTimer;        // after the last reading of a batch
+    qint64 m_interval;          // [ms]
+    int m_minStatus;            // QHrmSensor::Status, 3 = AccuracyMedium
+    int m_activeSpread;         // [bpm]
+    qint64 m_lastLoggedMs = 0;  // readings up to here are in the files (sensorfw replays the last one)
+    qint64 m_open = -1;         // the interval being collected (takenMs / m_interval)
+    QVector<Sample> m_samples;  // its usable readings
+    int m_readings = 0;         // all readings since the last record, for the journal
+    int m_unusable = 0;
 
     const QString sensorPathPrefix = "heartrateMonitor";
 };

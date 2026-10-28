@@ -25,14 +25,20 @@
 #include "sensorPlugins/heartrateSensor.h"
 #include "sensorPlugins/barometerSensor.h"
 
-class BackgroundActivity;
-
+/*
+ * Heart rate and steps are measured all the time by their sensors, which on
+ * a sensor hub batch the readings while the system sleeps (the hub wakes the
+ * system itself only when a batch must be delivered); the plugins write the
+ * records when readings arrive, dated by the readings. Nothing here wakes
+ * the system: the barometer is read on an interval timer that only runs
+ * while the system is awake, and at display on.
+ */
 class Logger : public QObject
 {
     Q_OBJECT
 public:
     explicit Logger(QObject *parent = 0);
-    virtual ~Logger() {};
+    virtual ~Logger();
 public slots:
     void setup();
     void resetup();
@@ -40,12 +46,9 @@ public slots:
 private slots:
     void displayOn(QString displayState);
     void sensorfwRegistered();
-    void wakeRunning();
-    void wakeWork();
-    void wakeCheckDone();
-    void wakeDone();
 
 private:
+    void deletePlugins();
     QDBusServiceWatcher *m_sensorfwWatcher;
     bool m_setupDone = false;
     bool heartrateSensorEnabled = false;
@@ -57,19 +60,6 @@ private:
     bool daemonFresh;
     QSettings *settings;
     bool getDaemonFresh();
-
-    // Periodic system wake (dsme iphb through libkeepalive): the recordings
-    // run on it, so they happen with the system suspended too, and the sensor
-    // hub keeps heart rate and steps batched in between (non-wake-up)
-    void scheduleWake(int seconds);
-    void flushHub();
-    BackgroundActivity *m_wake = nullptr;
-    QTimer *m_wakeSettle;   // flush -> batched samples delivered
-    QTimer *m_wakePoll;     // a short recording (barometer) still running
-    QTimer *m_wakeLimit;    // the keepalive never lasts longer than this
-    int m_wakeInterval = 600; // [s]
-    bool m_flushWarned = false;
-
 };
     bool dayFileExists(QString sensorPrefix, QDateTime date = QDateTime::currentDateTime()); //check if today has a log file for the given sensor
     QStringList fileGetPrevRecord(QString sensorPrefix, QDateTime recordTime = QDateTime::currentDateTime()); //works backwards to find the last record in today's file before the given time - returns nothing if no file is found.

@@ -16,29 +16,29 @@
 #include <QTimer>
 #include <QtSensors/QStepCounterSensor>
 #include <QSettings>
-#include <time.h>
 
 #include "../logger.h"
 #include "../../common.h"
 
 #include "stepCounter.h"
+#include "sampleTime.h"
+
+// a batch is over when no reading came for this long
+static const int BATCH_IDLE_MS = 2000;
 
 StepCounterPlugin::StepCounterPlugin(QObject* parent, int initInterval, bool daemonFresh)
     : QObject(parent)
 {
-    interval = initInterval;
+    interval = qMax(60000, initInterval);
     m_daemonFresh = daemonFresh;
     m_settings = new QSettings("asteroid", "sensorlogd", this);
 
-    qDebug() << "step counter sensor is enabled. interval is (ms) " << interval;
-    recordIntervalTimer = new QTimer(this);
-    connect(recordIntervalTimer, SIGNAL(timeout()), this, SLOT(triggerRecording()));
-    recordIntervalTimer->setSingleShot(true);
-    recordIntervalTimer->start(interval);
-    lastRecordTime = QDateTime::currentDateTime();
-
+    qDebug() << "step counter sensor is enabled, the count is written at least every" << interval / 1000 << "s of steps";
     setupFilePath(sensorPathPrefix);
 
+    m_day = QDate::fromString(m_settings->value("StepCounterPrivate/offsetDay").toString(), Qt::ISODate);
+    if (!m_day.isValid())
+        m_day = QDate::currentDate();
     if (!daemonFresh) {
         // restarted within the same boot: the counter went on counting, so the
         // stored offset holds - unless it is above the counter (checked on the
@@ -46,27 +46,34 @@ StepCounterPlugin::StepCounterPlugin(QObject* parent, int initInterval, bool dae
         m_stepsOffset = m_settings->value("StepCounterPrivate/stepsOffset", 0).toInt();
         m_storedOffset = true;
     }
-    // the offset is settled by readingReceived() on the first reading
+    // the offset is settled by the first reading
 
     m_retryDelay = 30000;
     m_retryTimer = new QTimer(this);
     m_retryTimer->setSingleShot(true);
-    connect(m_retryTimer, SIGNAL(timeout()), this, SLOT(retryStart()));
+    connect(m_retryTimer, &QTimer::timeout, this, &StepCounterPlugin::retryStart);
+    m_idleTimer = new QTimer(this);
+    m_idleTimer->setSingleShot(true);
+    m_idleTimer->setInterval(BATCH_IDLE_MS);
+    connect(m_idleTimer, &QTimer::timeout, this, &StepCounterPlugin::batchIdle);
     stepcounterSensor = nullptr;
     startSensor();
+}
+
+StepCounterPlugin::~StepCounterPlugin()
+{
+    writePending();
 }
 
 void StepCounterPlugin::startSensor()
 {
     stepcounterSensor = new QStepCounterSensor(this);
     stepcounterSensor->setAlwaysOn(true); // sensorfw stops sensors in standby (display off) otherwise
-    connect(stepcounterSensor, SIGNAL(readingChanged()), this, SLOT(readingReceived()));
+    connect(stepcounterSensor, &QSensor::readingChanged, this, &StepCounterPlugin::readingReceived);
     if (stepcounterSensor->start() && stepcounterSensor->isActive()) {
         m_retryDelay = 30000;
         return;
     }
-    // (this used to wait for isActive() in a busy loop, which spun a core for
-    // good when the sensor could not start, e.g. before sensorfwd was up)
     qWarning() << "step counter did not start, retrying in" << m_retryDelay / 1000 << "s";
     m_retryTimer->start(m_retryDelay);
     m_retryDelay = qMin(m_retryDelay * 2, 30 * 60 * 1000);
@@ -82,6 +89,49 @@ void StepCounterPlugin::retryStart()
 void StepCounterPlugin::saveOffset()
 {
     m_settings->setValue("StepCounterPrivate/stepsOffset", m_stepsOffset);
+    m_settings->setValue("StepCounterPrivate/offsetDay", m_day.toString(Qt::ISODate));
+}
+
+// the first reading: where the day's count starts on the counter
+void StepCounterPlugin::settleOffset(int rawSteps)
+{
+    const QDate today = QDate::currentDate();
+    if (m_storedOffset && m_stepsOffset <= rawSteps) {
+        // same boot, the counter went on: keep the stored offset; one from an
+        // earlier day goes on from that day's last count
+        if (m_day < today) {
+            m_stepsOffset += fileGetPrevRecord(sensorPathPrefix, QDateTime(m_day, QTime(23, 59, 59)))[1].toInt();
+            m_day = today;
+        }
+    } else if (dayFileExists(sensorPathPrefix)) {
+        // (also a stored offset above the counter: it was stored for another
+        // count, e.g. by the previous boot) go on from today's last count;
+        // steps taken while the daemon was not running are not counted
+        m_stepsOffset = rawSteps - fileGetPrevRecord(sensorPathPrefix)[1].toInt();
+        m_day = today;
+    } else {
+        // nothing logged today: the first daemon of this boot (the counter
+        // started with it, the hub firmware is loaded at every boot) or a
+        // counter that started again; its steps so far are today's
+        m_stepsOffset = 0;
+        m_day = today;
+    }
+    saveOffset();
+    m_offsetReady = true;
+    m_writtenSteps = dayFileExists(sensorPathPrefix) ? fileGetPrevRecord(sensorPathPrefix)[1].toInt() : -1;
+    qDebug() << "first step counter reading" << rawSteps << "offset" << m_stepsOffset;
+}
+
+// the counter is on-change: its last reading of a day is the day's total
+void StepCounterPlugin::newDay(const QDate &day)
+{
+    writePending();
+    m_stepsOffset = m_lastRawSteps;
+    m_day = day;
+    m_writtenSteps = -1;
+    m_open = -1;
+    saveOffset();
+    qDebug() << "new day" << day.toString(Qt::ISODate) << ": the count starts at counter value" << m_stepsOffset;
 }
 
 void StepCounterPlugin::readingReceived()
@@ -89,88 +139,73 @@ void StepCounterPlugin::readingReceived()
     QStepCounterReading *reading = stepcounterSensor->reading();
     if (!reading || reading->timestamp() == 0)
         return;
-    int rawSteps = reading->steps();
-    if (m_offsetReady) {
-        // The counter is cumulative; a lower value means it started again from
-        // zero (sensor hub reset or firmware reload, sensorfwd restart). Carry
-        // on from the count so far instead of computing negative steps, which
-        // were never recorded ("offset value is less than previous value")
-        // until the next midnight. A zero is not trusted as a restart.
-        if (rawSteps > 0) {
-            if (rawSteps < m_lastRawSteps) {
-                m_stepsOffset -= m_lastRawSteps;
-                saveOffset();
-                qWarning() << "step counter started again at" << rawSteps << "(was" << m_lastRawSteps << "), offset now" << m_stepsOffset;
-            }
+    const int rawSteps = reading->steps();
+    const qint64 taken = readingWallMs(reading->timestamp());
+    m_idleTimer->start();
+    if (!m_offsetReady) {
+        if (rawSteps > 0)
             m_lastRawSteps = rawSteps;
+        settleOffset(rawSteps);
+    } else {
+        const QDate takenDay = QDateTime::fromMSecsSinceEpoch(taken).date();
+        if (takenDay > m_day)
+            newDay(takenDay);
+        // The counter is cumulative; a lower value means it started again from
+        // zero (sensor hub reset or firmware reload). Carry on from the count
+        // so far instead of computing negative steps. A zero is not trusted as
+        // a restart.
+        if (rawSteps > 0 && rawSteps < m_lastRawSteps) {
+            m_stepsOffset -= m_lastRawSteps;
+            saveOffset();
+            qWarning() << "step counter started again at" << rawSteps << "(was" << m_lastRawSteps << "), offset now" << m_stepsOffset;
         }
+        if (rawSteps > 0)
+            m_lastRawSteps = rawSteps;
+    }
+    if (taken < m_lastReadingMs)
+        return; // older than what was counted already (a replayed reading)
+    m_lastReadingMs = taken;
+    const int steps = rawSteps - m_stepsOffset;
+    if (rawSteps <= 0 || steps < 0)
+        return;
+    const qint64 at = taken / interval;
+    if (m_open >= 0 && at != m_open)
+        writePending();
+    m_open = at;
+    m_pendingSteps = steps;
+    m_pendingMs = taken;
+}
+
+void StepCounterPlugin::writePending()
+{
+    if (m_pendingSteps < 0)
+        return;
+    const int steps = m_pendingSteps;
+    m_pendingSteps = -1;
+    if (steps == m_writtenSteps)
+        return;
+    if (steps < m_writtenSteps) {
+        qDebug() << "step count" << steps << "below the last written" << m_writtenSteps << "- not recording";
         return;
     }
-    m_lastRawSteps = rawSteps;
-    if (m_storedOffset && m_stepsOffset <= rawSteps) {
-        // same boot, the counter went on: keep the stored offset
-    } else if (dayFileExists(sensorPathPrefix)) {
-        // (also a stored offset above the counter: it was stored for another
-        // count, e.g. by the previous boot when this boot's first daemon never
-        // got a reading, and gave negative steps for the rest of the day)
-        // we reset the step count, ignoring all steps that may have been taken while the daemon isn't running. Devices which count steps independently will need custom code.
-        m_stepsOffset = rawSteps - fileGetPrevRecord(sensorPathPrefix)[1].toInt();
-    } else {
-        m_stepsOffset = m_settings->value("StepCounterPrivate/stepsOffset", 0).toInt();
-        if (m_stepsOffset > rawSteps) // the counter started again from zero with this boot
-            m_stepsOffset = 0;
-    }
-    saveOffset();
-    m_offsetReady = true;
-    qDebug() << "first step counter reading" << rawSteps << "offset" << m_stepsOffset;
+    fileAddRecord(sensorPathPrefix, QString::number(steps), QDateTime::fromMSecsSinceEpoch(m_pendingMs));
+    m_writtenSteps = steps;
+}
+
+void StepCounterPlugin::batchIdle()
+{
+    // the newest count of the batch, so the day file is current
+    writePending();
 }
 
 void StepCounterPlugin::timeUpdate()
 {
-    QDateTime currDateTime = QDateTime::currentDateTime();
-    uint elapsed = currDateTime.toMSecsSinceEpoch() - lastRecordTime.toMSecsSinceEpoch();
-    qDebug() << "time until next steps recording" << recordIntervalTimer->remainingTime() << " elapsed = " << elapsed << " lastRecordTime " << lastRecordTime.toMSecsSinceEpoch();
-    if (elapsed + 30000 > (uint)interval) { // if too much time has passed, reset the timer and record
-        triggerRecording();
-    } else { // otherwise, restart the timer and compensate for time spent in suspend
-        recordIntervalTimer->start(interval - elapsed);
-    }
+    if (m_offsetReady && QDate::currentDate() > m_day)
+        newDay(QDate::currentDate()); // no step since midnight: today starts at the last count
+    writePending();
 }
 
 void StepCounterPlugin::triggerRecording()
 {
-    qDebug() << "stepcounter interval recording";
-    recordIntervalTimer->start(interval);
-    if (!m_offsetReady || stepcounterSensor->reading()->timestamp() == 0) { // no sample from the sensor yet (just started; a sensor hub may still be batching)
-        qDebug() << "no step counter reading yet - not recording";
-        return;
-    }
-    int rawSteps = stepcounterSensor->reading()->steps();
-    if (rawSteps < m_lastRawSteps) { // a zero (or not yet the restarted counter's new value): see readingReceived()
-        qDebug() << "step counter reads" << rawSteps << "below" << m_lastRawSteps << "- not recording";
-        return;
-    }
-    if (lastRecordTime.date() != QDate::currentDate()) { // ok, so the date has changed.
-        if (dayFileExists(sensorPathPrefix)) { // this likely means we have just had a system time change
-            QStringList lastLineData = fileGetPrevRecord(sensorPathPrefix);
-            m_stepsOffset = rawSteps - lastLineData[1].toInt(); // we scrap the current steps value, recover the last reading from today's file and count from there
-                // The reset is necessary because asteroid doesn't have robust time when it boots up, it takes a while for that to happen. So, instead of dealing with that, we just reset the counter every time there's a date change
-        } else if (lastRecordTime.date() == QDate::currentDate().addDays(-1)) { // this means that a midnight just passed
-            int steps = rawSteps - m_stepsOffset;
-            fileAddRecord(sensorPathPrefix, QString::number(steps), QDateTime(QDate::currentDate().addDays(-1), QTime(23, 59, 59))); // this writes the current step count to the last second of the previous day
-            m_stepsOffset = rawSteps; // and then we 'reset' the step counter
-        }
-        m_settings->setValue("StepCounterPrivate/stepsOffset", m_stepsOffset);
-        qDebug() << "date change detected. Step counter value is " << rawSteps << " and offset is " << m_stepsOffset;
-    } else {
-        int steps = rawSteps - m_stepsOffset;
-        qDebug() << QDateTime::currentDateTime().toString("hh:mm:ss") << " : " << steps << stepcounterSensor->isActive();
-        // we probably ought to do some error checking here
-        if (steps < fileGetPrevRecord(sensorPathPrefix)[1].toInt()) {
-            qDebug() << "error: offset value is less than previous value - not recording"; // this is an error condition which is either caused by a bad offset value or by the sensor being slow and returning a bad value
-            return;
-        }
-        fileAddRecord(sensorPathPrefix, QString::number(steps));
-    }
-    lastRecordTime = QDateTime::currentDateTime();
+    writePending();
 }

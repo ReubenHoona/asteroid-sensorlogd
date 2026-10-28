@@ -8,201 +8,170 @@
  * You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
 
 #include <QDateTime>
-#include <time.h>
+#include <QDebug>
+#include <QSettings>
+#include <QString>
 #include <QTimer>
 #include <QtSensors/QHrmSensor>
-#include <QDebug>
-#include <QString>
 
 #include "../logger.h"
 #include "../../common.h"
 
 #include "heartrateSensor.h"
+#include "sampleTime.h"
 
-// after this long without a usable reading the recording gives up; checked
-// on the QTimer while awake and against the wall clock at a system wake
-static const int RECORD_TIMEOUT_MS = 60000;
-static const int RECORD_TIMEOUT_SLACK_MS = 5000;
+// a batch is over when no reading came for this long
+static const int BATCH_IDLE_MS = 2000;
+static const qint64 MINUTE_MS = 60000;
 
-static quint64 monotonicUs() {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (quint64)ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;
-}
-
-HeartrateSensorPlugin::HeartrateSensorPlugin(QObject *parent, int initInterval, bool initContinuous)  :
-    QObject(parent){
-    interval = initInterval;
-    continuous = initContinuous;
-
-    hrmSensor = nullptr;
-    makeSensor();
-    m_retryTimer = new QTimer(this);
-    m_retryTimer->setSingleShot(true);
-    connect(m_retryTimer, SIGNAL(timeout()), this, SLOT(retryContinuous()));
+HeartrateSensorPlugin::HeartrateSensorPlugin(QObject *parent, QSettings *settings, int interval) :
+    QObject(parent), m_settings(settings)
+{
+    m_interval = qMax(60000, interval);
+    // QHrmSensor::Status: 0 no contact, 1 unreliable, 2 low, 3 medium, 4 high
+    // (the hub's accuracy 0..4, as the stock HAL maps it); medium and up is logged
+    m_minStatus = qBound(1, m_settings->value("heartrateSensor/minStatus", 3).toInt(), 4);
+    m_activeSpread = qMax(1, m_settings->value("heartrateSensor/activeSpread", 15).toInt());
+    m_lastLoggedMs = m_settings->value("HeartratePrivate/lastReadingMs", 0).toLongLong();
+    if (m_lastLoggedMs > QDateTime::currentMSecsSinceEpoch())
+        m_lastLoggedMs = 0; // the clock went back
 
     setupFilePath(sensorPathPrefix);
 
-    qDebug() << "heartrate sensor is enabled. interval is (ms) " << interval;
-    recordIntervalTimer = new QTimer(this);
-    connect(recordIntervalTimer,SIGNAL(timeout()),this,SLOT(triggerRecording()));
+    m_retryTimer = new QTimer(this);
+    m_retryTimer->setSingleShot(true);
+    connect(m_retryTimer, &QTimer::timeout, this, &HeartrateSensorPlugin::retryStart);
+    m_idleTimer = new QTimer(this);
+    m_idleTimer->setSingleShot(true);
+    m_idleTimer->setInterval(BATCH_IDLE_MS);
+    connect(m_idleTimer, &QTimer::timeout, this, &HeartrateSensorPlugin::batchIdle);
 
-    // give up on a recording that gets no usable reading (e.g. off the wrist)
-    // rather than keeping the sensor on until the next one
-    recordTimeoutTimer = new QTimer(this);
-    recordTimeoutTimer->setSingleShot(true);
-    recordTimeoutTimer->setInterval(RECORD_TIMEOUT_MS);
-    connect(recordTimeoutTimer,SIGNAL(timeout()),this,SLOT(abortRecording()));
-    recordIntervalTimer->setSingleShot(true);
-    recordIntervalTimer->start(interval);
-    lastRecordTime = QDateTime::currentDateTime();
-
-    if (continuous) {
-        qDebug() << "heartrate sensor is continuous";
-        recordIntervalTimer->stop();
-        retryContinuous();
-    }
-}
-
-void HeartrateSensorPlugin::makeSensor() {
-    delete hrmSensor;
-    hrmSensor = new QHrmSensor(this);
-    hrmSensor->setAlwaysOn(true); // sensorfw stops sensors in standby (display off) otherwise
-    connect(hrmSensor,SIGNAL(readingChanged()),this,SLOT(finishRecording()));
-}
-
-// QtSensors' sensorfw backend does not set up a sensor again by itself once
-// its first set-up failed (sensorfwd not ready, heart rate not listed by the
-// hub yet), so start() kept failing quietly at every recording. Make a new
-// sensor when a start fails.
-bool HeartrateSensorPlugin::startSensor() {
-    if (hrmSensor->start())
-        return true;
-    qWarning() << "heart rate sensor did not start, making it again";
+    if (m_settings->contains("heartrateSensor/continuous"))
+        qDebug() << "heartrateSensor/continuous is no longer used: the heart rate is measured all the time";
+    qDebug() << "heart rate sensor is enabled, one record per" << m_interval / 1000 << "s at rest";
     makeSensor();
-    if (hrmSensor->start())
-        return true;
-    qWarning() << "heart rate sensor still does not start";
-    return false;
+    startSensor();
 }
 
-void HeartrateSensorPlugin::retryContinuous() {
-    if (startSensor()) {
+HeartrateSensorPlugin::~HeartrateSensorPlugin()
+{
+    closeInterval(); // what was collected so far is not lost on a restart
+}
+
+void HeartrateSensorPlugin::makeSensor()
+{
+    delete m_sensor;
+    m_sensor = new QHrmSensor(this);
+    m_sensor->setAlwaysOn(true); // sensorfw stops sensors in standby (display off) otherwise
+    connect(m_sensor, &QSensor::readingChanged, this, &HeartrateSensorPlugin::readingReceived);
+}
+
+// QtSensors' sensorfw backend does not set a sensor up again once its first
+// set-up failed (sensorfwd not ready): make a new one for every retry
+void HeartrateSensorPlugin::startSensor()
+{
+    if (m_sensor->start() && m_sensor->isActive()) {
         m_retryDelay = 30000;
         return;
     }
-    qWarning() << "continuous heart rate: retrying in" << m_retryDelay / 1000 << "s";
+    qWarning() << "heart rate sensor did not start, retrying in" << m_retryDelay / 1000 << "s";
     m_retryTimer->start(m_retryDelay);
     m_retryDelay = qMin(m_retryDelay * 2, 30 * 60 * 1000);
 }
 
-void HeartrateSensorPlugin::timeUpdate() {
-    if (continuous)
-        return;
-    uint elapsed = QDateTime::currentMSecsSinceEpoch() - lastRecordTime.toMSecsSinceEpoch();
-    qDebug() << "time until next steps recording" << recordIntervalTimer->remainingTime() << " elapsed = " << elapsed << " lastRecordTime " << lastRecordTime.toMSecsSinceEpoch();
-    if (elapsed + 30000 > (uint)interval) { //if too much time has passed, reset the timer and record
-        triggerRecording();
-    } else { //otherwise, restart the timer and compensate for time spent in suspend
-        recordIntervalTimer->start(interval - elapsed);
-    }
+void HeartrateSensorPlugin::retryStart()
+{
+    makeSensor();
+    startSensor();
 }
 
-void HeartrateSensorPlugin::wakeUpdate() {
-    if (continuous)
-        return; // the hub's batch has been logged as it arrived
-    if (m_measuring) {
-        // the batch of the last minute came with the flush; nothing usable in it
-        if (QDateTime::currentMSecsSinceEpoch() - m_startedMs >= RECORD_TIMEOUT_MS - RECORD_TIMEOUT_SLACK_MS)
-            abortRecording();
+void HeartrateSensorPlugin::readingReceived()
+{
+    QHrmReading *reading = m_sensor->reading();
+    if (!reading)
+        return;
+    const qint64 taken = readingWallMs(reading->timestamp());
+    const int bpm = reading->bpm();
+    m_idleTimer->start();
+    if (taken <= m_lastLoggedMs)
+        return; // already in the files (sensorfw replays the last reading at a start)
+    m_readings++;
+    if (bpm <= 0 || (int)m_sensor->status() < m_minStatus) {
+        m_unusable++;
         return;
     }
-    timeUpdate();
+    const qint64 interval = taken / m_interval;
+    if (m_open >= 0 && interval != m_open)
+        closeInterval();
+    m_open = interval;
+    m_samples.append({taken, bpm});
 }
 
-void HeartrateSensorPlugin::triggerRecording() {
-    if (continuous)
-        return;
-    qDebug() << "heartrate interval recording";
-    recordIntervalTimer->start(interval);
-    lastRecordTime = QDateTime::currentDateTime();
+void HeartrateSensorPlugin::batchIdle()
+{
+    // the interval the last batch ended in is complete once its time is over
+    if (m_open >= 0 && (m_open + 1) * m_interval <= QDateTime::currentMSecsSinceEpoch())
+        closeInterval();
+}
+
+void HeartrateSensorPlugin::timeUpdate()
+{
+    batchIdle();
+}
+
+void HeartrateSensorPlugin::triggerRecording()
+{
+    // asked over D-Bus: write what the open interval has so far
+    closeInterval();
+}
+
+void HeartrateSensorPlugin::closeInterval()
+{
+    if (!m_samples.isEmpty()) {
+        int lo = m_samples.first().bpm, hi = lo;
+        for (const Sample &s : m_samples) {
+            lo = qMin(lo, s.bpm);
+            hi = qMax(hi, s.bpm);
+        }
+        const qint64 span = m_samples.last().takenMs - m_samples.first().takenMs;
+        if (hi - lo > m_activeSpread && span >= 2 * MINUTE_MS) {
+            // not at rest: one record per minute
+            QVector<Sample> minute;
+            qint64 current = m_samples.first().takenMs / MINUTE_MS;
+            for (const Sample &s : m_samples) {
+                if (s.takenMs / MINUTE_MS != current) {
+                    writeRecord(minute);
+                    minute.clear();
+                    current = s.takenMs / MINUTE_MS;
+                }
+                minute.append(s);
+            }
+            writeRecord(minute);
+        } else {
+            writeRecord(m_samples);
+        }
+        m_lastLoggedMs = m_samples.last().takenMs;
+        m_settings->setValue("HeartratePrivate/lastReadingMs", m_lastLoggedMs);
+    } else if (m_readings) {
+        qDebug() << "heart rate:" << m_readings << "readings," << m_unusable << "below the accuracy logged";
+    }
+    m_samples.clear();
+    m_open = -1;
     m_readings = 0;
-    m_bestStatus = -1;
-    m_measuring = true;
-    m_startedMs = QDateTime::currentMSecsSinceEpoch();
-    if (!startSensor()) {
-        m_measuring = false;
-        return; // tried again at the next recording
-    }
-    recordTimeoutTimer->start();
+    m_unusable = 0;
 }
 
-void HeartrateSensorPlugin::finishRecording() {
-    int bpm = hrmSensor->reading()->bpm();
-    if (!continuous) // continuous mode: a reading every second, around the clock; no journal lines for each
-        qDebug() << "bpm update received" << QDateTime::currentDateTime().toString("hh:mm:ss") << " : " << bpm << hrmSensor->status() << hrmSensor->isActive();
-    if (!continuous) {
-        m_readings++;
-        m_bestStatus = qMax(m_bestStatus, (int)hrmSensor->status());
-    }
-    if ((bpm == 0) || (hrmSensor->status() < 3)) {
-        if (!continuous)
-            qDebug() << "hrm sensor accuracy insufficient. waiting.";
+// the median reading of a run, with the time it was taken
+void HeartrateSensorPlugin::writeRecord(const QVector<Sample> &samples)
+{
+    if (samples.isEmpty())
         return;
-    }
-    if (continuous) {
-        addContinuousSample(bpm);
-        return;
-    }
-    if (!m_measuring)
-        return; // a late sample after the recording ended
-    // When it was taken: the reading's CLOCK_MONOTONIC time stamp comes from
-    // the hub's boot time clock, so its age counts suspended time too (a
-    // batched reading arrives up to a minute late)
-    qint64 ageMs = ((qint64)monotonicUs() - (qint64)hrmSensor->reading()->timestamp()) / 1000;
-    if (ageMs < 0 || ageMs > 2 * 3600 * 1000) // not a time base we know
-        ageMs = 0;
-    const qint64 takenMs = QDateTime::currentMSecsSinceEpoch() - ageMs;
-    // sensorfw replays the last value it has when a sensor starts: only a
-    // reading taken after this recording started counts
-    if (takenMs + 1000 < m_startedMs) {
-        qDebug() << "stale heart rate reading from before the recording, waiting";
-        return;
-    }
-    fileAddRecord(sensorPathPrefix,QString::number(bpm),QDateTime::fromMSecsSinceEpoch(takenMs));
-    m_measuring = false;
-    recordTimeoutTimer->stop();
-    hrmSensor->stop();
-}
-
-void HeartrateSensorPlugin::abortRecording() {
-    // status: 0 no contact, 1 unreliable, 2 low, 3 medium, 4 high; >= 3 is recorded
-    qWarning() << "no usable heartrate reading in" << recordTimeoutTimer->interval() / 1000 << "s:"
-               << m_readings << "readings, best status" << m_bestStatus << "- stopping until the next recording";
-    m_measuring = false;
-    recordTimeoutTimer->stop();
-    hrmSensor->stop();
-}
-
-void HeartrateSensorPlugin::addContinuousSample(int bpm) {
-    // the reading's timestamp is CLOCK_MONOTONIC in microseconds (sensorfw);
-    // batched samples arrive late, so date them by it rather than by arrival
-    qint64 ageMs = ((qint64)monotonicUs() - (qint64)hrmSensor->reading()->timestamp()) / 1000;
-    if (ageMs < 0 || ageMs > 2 * 3600 * 1000) // not a time base we know
-        ageMs = 0;
-    qint64 taken = QDateTime::currentMSecsSinceEpoch() - ageMs;
-    qint64 minute = taken / 60000 * 60000;
-
-    if (minuteCount && minute != minuteStart) {
-        fileAddRecord(sensorPathPrefix, QString::number(qRound((double)minuteSum / minuteCount)),
-                      QDateTime::fromMSecsSinceEpoch(minuteStart));
-        minuteCount = 0;
-        minuteSum = 0;
-    }
-    if (!minuteCount)
-        minuteStart = minute;
-    minuteSum += bpm;
-    minuteCount++;
+    QVector<Sample> sorted = samples;
+    std::stable_sort(sorted.begin(), sorted.end(),
+                     [](const Sample &a, const Sample &b) { return a.bpm < b.bpm; });
+    const Sample &median = sorted.at(sorted.size() / 2);
+    fileAddRecord(sensorPathPrefix, QString::number(median.bpm), QDateTime::fromMSecsSinceEpoch(median.takenMs));
 }

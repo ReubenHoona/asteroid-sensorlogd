@@ -18,7 +18,6 @@ include(Asteroid6CMakeSettings)
 
 find_package(Qt6 COMPONENTS Core DBus Qml Sensors REQUIRED)
 pkg_check_modules(mlite6 REQUIRED mlite6)
-pkg_check_modules(keepalive REQUIRED keepalive)
 
 add_subdirectory(daemon)
 add_subdirectory(qmlplugin)
