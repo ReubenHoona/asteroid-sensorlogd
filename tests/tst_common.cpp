@@ -168,12 +168,9 @@ private slots:
 
     void prevRecordSkipsAZeroFilledTail()
     {
-        // ext4 can leave a zero-filled tail after a power loss mid-write. readDayRecords() skips it, but
-        // fileGetPrevRecord() takes the last non-empty line, gives {"0", "0"} and the step counter's first reading
-        // after the reboot then counts the day from zero again (see tst_stepcounter freshBootAfterPowerLoss).
+        // ext4 can leave a zero-filled tail after a power loss mid-write: fileGetPrevRecord() takes the last valid
+        // record (93a4e69), or the step counter's first reading after the reboot would count the day from zero again
         testenv::writeDay("stepCounter", QDate::currentDate(), QByteArray("100:5\n200:4800\n") + QByteArray(16, '\0'));
-        QEXPECT_FAIL("", "BUG fileGetPrevRecord: a zero-filled / torn last line hides the day's last record "
-                         "(patches/sensorlogd/0001-fileGetPrevRecord-last-valid-record.patch)", Continue);
         QCOMPARE(fileGetPrevRecord("stepCounter"), QStringList({"200", "4800"}));
     }
 };
