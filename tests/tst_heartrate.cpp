@@ -1,297 +1,326 @@
-// HeartrateSensorPlugin (daemon/sensorPlugins/heartrateSensor.cpp) against the fake QtSensors backend.
-// Interval mode: a recording starts the sensor, readings with bpm 0 or a status below AccuracyMedium are not
-// logged, the first good one is and stops the sensor, a recording without a good reading is given up after the
-// timeout, a sensor that does not start is made again, the interval timer and its suspend compensation.
-// Continuous mode: the sensor stays on, good samples are averaged per minute of the time they were taken (the
-// reading's CLOCK_MONOTONIC timestamp, so batched samples are dated right), a minute is written when the first
-// sample of a later minute arrives, and a sensor that does not start is retried with a backoff.
-#include <QRegularExpression>
-#include <QTest>
-#include <memory>
+// The heart rate plugin (daemon/sensorPlugins/heartrateSensor.*) and its database (heartrateDb.*): every reading
+// with a heart rate goes to <root>/heartrate.db, a batch in one transaction once it is over, live readings once a
+// minute and at display off; readings that come late, across midnight, out of order or twice are kept once each;
+// a reader reads while a batch is written (WAL); a damaged file is kept aside; readings wait in memory while the
+// database cannot be written. The day files keep their one median record per interval for the Health app.
+// The readings are synthetic. Their time stamps are CLOCK_BOOTTIME microseconds, as sensorfw's are.
 #include <time.h>
 
+#include <sqlite3.h>
+
+#include <QElapsedTimer>
+#include <QSignalSpy>
+#include <QTest>
+
 #include "../common.h"
+#include "../daemon/sensorPlugins/sampleTime.h"
 #include "peek.h"
 #include "testenv.h"
 
 namespace {
-const QByteArray type = QHrmSensor::sensorType;
-const QString prefix = "heartrateMonitor";
-enum { NoContact, Unreliable, AccuracyLow, AccuracyMedium, AccuracyHigh };
 
-FakeSensorBackend *backend()
-{
-    FakeSensorBackend *b = FakeSensorBackend::last(type);
-    if (!b)
-        qFatal("no heart rate backend");
-    return b;
-}
-
-// the reading timestamp (CLOCK_MONOTONIC, microseconds) of a sample taken at wall-clock time TAKENMS
-quint64 timestampFor(qint64 takenMs)
+quint64 bootUsAgo(qint64 ageMs)
 {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    const qint64 monoUs = (qint64)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
-    const qint64 wallMs = QDateTime::currentMSecsSinceEpoch();
-    return monoUs - (wallMs - takenMs) * 1000;
+    clock_gettime(CLOCK_BOOTTIME, &ts);
+    return (quint64)((qint64)ts.tv_sec * 1000000 + ts.tv_nsec / 1000 - ageMs * 1000);
 }
 
-quint64 monotonicUs()
+// the database's rows as "time:bpm:accuracy", in table (time) order; optionally only time >= from, < to
+QStringList rows(qint64 from = 0, qint64 to = LLONG_MAX)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (quint64)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+    QStringList out;
+    sqlite3 *db = nullptr;
+    if (sqlite3_open_v2(QFile::encodeName(heartrateDbPath()).constData(), &db, SQLITE_OPEN_READWRITE, nullptr)
+            != SQLITE_OK) {
+        sqlite3_close(db);
+        return out;
+    }
+    sqlite3_stmt *st = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT time, bpm, accuracy FROM heartrate WHERE time >= ? AND time < ?", -1, &st,
+                           nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(st, 1, from);
+        sqlite3_bind_int64(st, 2, to);
+        while (sqlite3_step(st) == SQLITE_ROW)
+            out << QString("%1:%2:%3").arg(sqlite3_column_int64(st, 0)).arg(sqlite3_column_int(st, 1))
+                       .arg(sqlite3_column_int(st, 2));
+    }
+    sqlite3_finalize(st);
+    sqlite3_close(db);
+    return out;
 }
 
-QString record(qint64 ms, int bpm) { return QString::number(ms / 1000) + ":" + QString::number(bpm); }
+QString row(qint64 time, int bpm, int accuracy) { return QString("%1:%2:%3").arg(time).arg(bpm).arg(accuracy); }
+
+QString pragma(const char *name)
+{
+    sqlite3 *db = nullptr;
+    QString value;
+    if (sqlite3_open_v2(QFile::encodeName(heartrateDbPath()).constData(), &db, SQLITE_OPEN_READWRITE, nullptr)
+            == SQLITE_OK) {
+        sqlite3_stmt *st = nullptr;
+        if (sqlite3_prepare_v2(db, (QByteArray("PRAGMA ") + name).constData(), -1, &st, nullptr) == SQLITE_OK
+                && sqlite3_step(st) == SQLITE_ROW)
+            value = QString::fromUtf8(reinterpret_cast<const char *>(sqlite3_column_text(st, 0)));
+        sqlite3_finalize(st);
+    }
+    sqlite3_close(db);
+    return value;
 }
+
+} // namespace
 
 class TestHeartrate : public QObject
 {
     Q_OBJECT
-    std::unique_ptr<HeartrateSensorPlugin> plugin;
 
-    HeartrateSensorPlugin *make(bool continuous, int interval = 600000)
+    QScopedPointer<QSettings> settings;
+    QScopedPointer<HeartrateSensorPlugin> plugin;
+
+    HeartrateSensorPlugin *make(int interval = 600000)
     {
-        plugin.reset(new HeartrateSensorPlugin(nullptr, interval, continuous));
-        return plugin.get();
+        plugin.reset();
+        settings.reset(new QSettings("asteroid", "sensorlogd"));
+        plugin.reset(new HeartrateSensorPlugin(nullptr, settings.data(), interval));
+        return plugin.data();
+    }
+
+    FakeSensorBackend *backend() { return FakeSensorBackend::last(QHrmSensor::sensorType); }
+
+    // a reading taken ageMs ago, as the hub hands it over; its wall clock time
+    qint64 push(int bpm, qint64 ageMs, int status = QHrmSensor::AccuracyHigh)
+    {
+        const quint64 ts = bootUsAgo(ageMs);
+        backend()->pushHeartRate(bpm, status, ts);
+        return readingWallMs(ts);
     }
 
 private slots:
     void init() { testenv::clean(); }
-    void cleanup() { plugin.reset(); }
-
-    // ---- interval mode
-
-    void intervalModeWaitsForTheTimer()
+    void cleanup()
     {
-        make(false);
-        QVERIFY(QDir(testenv::root() + prefix).exists());
-        QVERIFY(plugin->recordIntervalTimer->isActive());
-        QVERIFY(!plugin->recordTimeoutTimer->isActive());
-        QCOMPARE(plugin->recordTimeoutTimer->interval(), 60000);
-        QVERIFY(plugin->hrmSensor->isAlwaysOn());
-        QVERIFY(!plugin->hrmSensor->isActive());
-        QCOMPARE(FakeSensorBackend::created(type), 0); // not started yet
+        plugin.reset();
+        settings.reset();
     }
 
-    void recordingLogsTheFirstGoodReading()
+    void theDatabaseIsMadeInWalMode()
     {
-        make(false);
+        make();
+        QVERIFY(QFile::exists(testenv::root() + "heartrate.db"));
+        QCOMPARE(pragma("journal_mode"), QString("wal"));
+        QCOMPARE(pragma("user_version"), QString("1"));
+        QVERIFY(rows().isEmpty());
+    }
+
+    void aBatchIsOneTransactionOnceItIsOver()
+    {
+        make();
+        QSignalSpy commits(plugin->m_commitTimer, &QTimer::timeout);
+        // half an hour batched by the hub, one reading a second, handed over at once
+        QList<qint64> times;
+        for (int i = 1800; i > 0; i--)
+            times << push(60 + i % 7, i * 1000LL);
+        QVERIFY(rows().isEmpty()); // not before the batch is over
+        QVERIFY(plugin->m_commitTimer->isActive());
+        QVERIFY(plugin->m_commitTimer->interval() <= 1000); // within the hub's wake hold after a batch
+        QTRY_COMPARE(rows().size(), 1800);
+        QCOMPARE(commits.size(), 1);
+        QCOMPARE(plugin->m_db.lastAdded(), 1800);
+        QCOMPARE(rows().first(), row(times.first(), 60 + 1800 % 7, QHrmSensor::AccuracyHigh));
+        QCOMPARE(rows().last(), row(times.last(), 60 + 1 % 7, QHrmSensor::AccuracyHigh));
+        QVERIFY(plugin->m_pending.isEmpty());
+    }
+
+    void liveReadingsGoOnceAMinuteAndAtDisplayOff()
+    {
+        make();
+        // live: a reading a second, each one when it is taken
+        const qint64 t0 = push(70, 2000);
+        push(71, 1000);
+        QVERIFY(plugin->m_commitTimer->isActive());
+        QCOMPARE(plugin->m_commitTimer->interval(), 60000);
+        const int left = plugin->m_commitTimer->remainingTime();
+        push(72, 0); // a live reading does not put the minute off
+        QVERIFY(plugin->m_commitTimer->remainingTime() <= left);
+        QVERIFY(rows().isEmpty());
+        plugin->displayOff();
+        QCOMPARE(rows().size(), 3);
+        QCOMPARE(rows().first(), row(t0, 70, QHrmSensor::AccuracyHigh));
+        QVERIFY(!plugin->m_commitTimer->isActive());
+    }
+
+    void theMinuteTimerWritesLiveReadings()
+    {
+        make();
+        push(70, 0);
+        plugin->m_commitTimer->setInterval(50); // instead of waiting a minute
+        plugin->m_commitTimer->start();
+        QTRY_COMPARE(rows().size(), 1);
+    }
+
+    void aRecordingAskedOverDBusAndARestartWriteToo()
+    {
+        make();
+        push(64, 1000);
         plugin->triggerRecording();
-        QVERIFY(backend()->running());
-        QVERIFY(plugin->recordTimeoutTimer->isActive());
-        backend()->pushHeartRate(70, AccuracyLow);
-        backend()->pushHeartRate(0, AccuracyHigh);
-        backend()->pushHeartRate(65, Unreliable);
-        QVERIFY(testenv::dayLines(prefix).isEmpty());
-        QVERIFY(backend()->running());
-        QCOMPARE(plugin->m_readings, 3);
-        QCOMPARE(plugin->m_bestStatus, (int)AccuracyHigh);
-        backend()->pushHeartRate(72, AccuracyMedium);
-        QCOMPARE(testenv::dayValues(prefix), QStringList({"72"}));
-        QVERIFY(!backend()->running());
-        QCOMPARE(backend()->stops(), 1);
-        QVERIFY(!plugin->recordTimeoutTimer->isActive());
+        QCOMPARE(rows().size(), 1);
+        push(65, 0);
+        plugin.reset(); // a restart: nothing collected is lost
+        QCOMPARE(rows().size(), 2);
     }
 
-    void eachRecordingStartsAfresh()
+    void aFlushOverlapIsKeptOnce()
     {
-        make(false);
-        plugin->triggerRecording();
-        backend()->pushHeartRate(80, AccuracyHigh);
-        plugin->triggerRecording();
-        QCOMPARE(plugin->m_readings, 0);
-        QCOMPARE(plugin->m_bestStatus, -1);
-        QVERIFY(backend()->running());
-        backend()->pushHeartRate(81, AccuracyHigh);
-        QCOMPARE(testenv::dayValues(prefix), QStringList({"80", "81"}));
-        QCOMPARE(backend()->starts(), 2);
+        make();
+        // the screen-on flush hands over what the hub batched; live readings follow and the flush's last
+        // readings come again (and sensorfw replays the last reading when a sensor starts)
+        QList<quint64> ts;
+        for (int i = 0; i < 100; i++)
+            ts << bootUsAgo((100 - i) * 1000LL);
+        for (int i = 0; i < 80; i++)
+            backend()->pushHeartRate(60 + i % 5, QHrmSensor::AccuracyMedium, ts[i]);
+        plugin->displayOff();
+        QCOMPARE(rows().size(), 80);
+        for (int i = 50; i < 100; i++)
+            backend()->pushHeartRate(60 + i % 5, QHrmSensor::AccuracyMedium, ts[i]);
+        backend()->pushHeartRate(60 + 99 % 5, QHrmSensor::AccuracyMedium, ts[99]);
+        plugin->displayOff();
+        QCOMPARE(plugin->m_db.lastAdded(), 20);
+        const QStringList all = rows();
+        QCOMPARE(all.size(), 100);
+        for (int i = 0; i < 100; i++)
+            QCOMPARE(all[i], row(readingWallMs(ts[i]), 60 + i % 5, QHrmSensor::AccuracyMedium));
     }
 
-    void recordingWithoutAGoodReadingIsGivenUp()
+    void aLateBatchAcrossMidnightIsKeptInTimeOrder()
     {
-        make(false);
-        plugin->triggerRecording();
-        backend()->pushHeartRate(0, NoContact);
-        QTest::ignoreMessage(QtWarningMsg,
-                             QRegularExpression("^no usable heartrate reading in 60 s: 1 readings, best status 0"));
-        QVERIFY(QMetaObject::invokeMethod(plugin.get(), "abortRecording"));
-        QVERIFY(!backend()->running());
-        QVERIFY(testenv::dayLines(prefix).isEmpty());
-    }
-
-    void timeoutTimerGivesUp()
-    {
-        make(false);
-        plugin->recordTimeoutTimer->setInterval(20);
-        QTest::ignoreMessage(QtWarningMsg, QRegularExpression("^no usable heartrate reading"));
-        plugin->triggerRecording();
-        QTRY_VERIFY(!backend()->running());
-    }
-
-    void sensorThatDoesNotStartIsMadeAgain()
-    {
-        make(false);
-        FakeSensorBackend::failStarts(type, 1);
-        QTest::ignoreMessage(QtWarningMsg, "heart rate sensor did not start, making it again");
-        plugin->triggerRecording();
-        QCOMPARE(FakeSensorBackend::created(type), 2);
-        QVERIFY(plugin->hrmSensor->isActive());
-        QVERIFY(plugin->hrmSensor->isAlwaysOn());
-        QVERIFY(plugin->recordTimeoutTimer->isActive());
-        backend()->pushHeartRate(66, AccuracyHigh); // the new sensor is connected
-        QCOMPARE(testenv::dayValues(prefix), QStringList({"66"}));
-    }
-
-    void sensorThatStillDoesNotStartWaitsForTheNextRecording()
-    {
-        make(false);
-        FakeSensorBackend::failStarts(type, 2);
-        QTest::ignoreMessage(QtWarningMsg, "heart rate sensor did not start, making it again");
-        QTest::ignoreMessage(QtWarningMsg, "heart rate sensor still does not start");
-        plugin->triggerRecording();
-        QVERIFY(!plugin->hrmSensor->isActive());
-        QVERIFY(!plugin->recordTimeoutTimer->isActive());
-        QVERIFY(plugin->recordIntervalTimer->isActive());
-        plugin->triggerRecording();
-        QVERIFY(plugin->hrmSensor->isActive());
-        QVERIFY(plugin->recordTimeoutTimer->isActive());
-    }
-
-    void noBackendIsLikeAFailedStart()
-    {
-        make(false);
-        FakeSensorBackend::failCreates(type, 1);
-        QTest::ignoreMessage(QtWarningMsg, "heart rate sensor did not start, making it again");
-        plugin->triggerRecording();
-        QVERIFY(plugin->hrmSensor->isActive());
-    }
-
-    void intervalTimerStartsRecordings()
-    {
-        make(false, 30);
-        QTRY_VERIFY(FakeSensorBackend::last(type) && backend()->starts() >= 1);
-    }
-
-    void timeUpdateRecordsWhenOverdue()
-    {
-        make(false);
-        plugin->lastRecordTime = QDateTime::currentDateTime().addSecs(-3600);
-        plugin->timeUpdate();
-        QVERIFY(backend()->running());
-        QVERIFY(plugin->recordIntervalTimer->remainingTime() > 590000);
-    }
-
-    void timeUpdateShortensTheTimer()
-    {
-        make(false);
-        plugin->lastRecordTime = QDateTime::currentDateTime().addSecs(-200);
-        plugin->timeUpdate();
-        QCOMPARE(FakeSensorBackend::created(type), 0);
-        const int remaining = plugin->recordIntervalTimer->remainingTime();
-        QVERIFY2(remaining <= 420000 && remaining > 380000, // a coarse timer: 5 % slack
-                 qPrintable(QString::number(remaining)));
-    }
-
-    // ---- continuous mode
-
-    void continuousModeKeepsTheSensorOn()
-    {
-        make(true);
-        QVERIFY(!plugin->recordIntervalTimer->isActive());
-        QVERIFY(backend()->running());
-        QVERIFY(!plugin->m_retryTimer->isActive());
-        plugin->triggerRecording(); // no interval recordings in continuous mode
-        plugin->timeUpdate();
-        QCOMPARE(backend()->starts(), 1);
-        QVERIFY(!plugin->recordIntervalTimer->isActive());
-        QVERIFY(!plugin->recordTimeoutTimer->isActive());
-    }
-
-    void continuousAveragesEachMinute()
-    {
-        make(true);
+        make();
+        const qint64 midnight = QDate::currentDate().startOfDay().toMSecsSinceEpoch();
+        // today's live readings are written first; the batch from around midnight (screen off) comes later
+        // (the plugin's way in for readings, keepReading(), takes their wall clock times directly here:
+        // midnight can be longer ago than the test machine's CLOCK_BOOTTIME)
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
-        const qint64 m = now / 60000 * 60000; // this minute
-        const qint64 b1 = m - 5 * 60000, b2 = m - 4 * 60000, b3 = m - 2 * 60000;
-        backend()->pushHeartRate(60, AccuracyMedium, timestampFor(b1 + 10000));
-        backend()->pushHeartRate(71, AccuracyHigh, timestampFor(b1 + 30000));
-        backend()->pushHeartRate(0, AccuracyHigh, timestampFor(b1 + 40000));    // no reading
-        backend()->pushHeartRate(200, AccuracyLow, timestampFor(b1 + 45000));  // not accurate enough
-        QVERIFY(testenv::dayLines(prefix).isEmpty()); // the minute is still open
-        backend()->pushHeartRate(80, AccuracyHigh, timestampFor(b2 + 10000));
-        backend()->pushHeartRate(81, AccuracyHigh, timestampFor(b2 + 20000));
-        backend()->pushHeartRate(85, AccuracyHigh, timestampFor(b2 + 30000));
-        backend()->pushHeartRate(90, AccuracyHigh, timestampFor(b3 + 5000));
-        // one record per minute at the minute's start: 65.5 rounds to 66, (80 + 81 + 85) / 3 = 82
-        const QDate day = QDateTime::fromMSecsSinceEpoch(b1).date();
-        const QStringList expected = {record(b1, 66), record(b2, 82)};
-        if (QDateTime::fromMSecsSinceEpoch(b2).date() == day)
-            QCOMPARE(testenv::dayLines(prefix, day), expected);
-        QVERIFY(backend()->running()); // never stopped in continuous mode
-        QCOMPARE(plugin->minuteStart, b3);
-        QCOMPARE(plugin->minuteCount, 1);
-        QCOMPARE(plugin->minuteSum, 90);
+        for (int i = 0; i < 5; i++)
+            plugin->keepReading(now - 5000 + i * 1000, 80, QHrmSensor::AccuracyHigh);
+        plugin->commitReadings();
+        for (qint64 t = midnight - 30000; t < midnight + 30000; t += 1000)
+            plugin->keepReading(t, 55 + (t / 1000) % 3, QHrmSensor::AccuracyMedium);
+        plugin->commitReadings();
+        QCOMPARE(rows().size(), 65);
+        QCOMPARE(rows(0, midnight).size(), 30);            // yesterday's
+        QCOMPARE(rows(midnight, midnight + 30000).size(), 30); // today's first half minute
+        QCOMPARE(rows(0, midnight).first(), row(midnight - 30000, 55 + ((midnight - 30000) / 1000) % 3, 3));
+        QCOMPARE(rows(0, midnight).last(), row(midnight - 1000, 55 + ((midnight - 1000) / 1000) % 3, 3));
+        // in time order, whatever order they came in
+        const QStringList all = rows();
+        for (int i = 1; i < all.size(); i++)
+            QVERIFY(all[i - 1].section(':', 0, 0).toLongLong() < all[i].section(':', 0, 0).toLongLong());
     }
 
-    void continuousDatesAMinuteByItsOwnDay()
+    void readingsWithoutContactAreNotKept()
     {
-        // a minute is written into the file of the day it was taken (batched samples from before midnight)
-        make(true);
-        const qint64 m = QDateTime::currentMSecsSinceEpoch() / 60000 * 60000;
-        const qint64 b1 = m - 10 * 60000;
-        backend()->pushHeartRate(70, AccuracyHigh, timestampFor(b1 + 1000));
-        backend()->pushHeartRate(75, AccuracyHigh, timestampFor(m - 60000 + 1000));
-        const QDate day = QDateTime::fromMSecsSinceEpoch(b1).date();
-        QCOMPARE(testenv::dayLines(prefix, day), QStringList({record(b1, 70)}));
+        make();
+        push(0, 3000, QHrmSensor::NoContact);
+        push(75, 2000, QHrmSensor::NoContact);
+        const qint64 unreliable = push(150, 1000, QHrmSensor::Unreliable);
+        const qint64 low = push(90, 500, QHrmSensor::AccuracyLow);
+        plugin->displayOff();
+        // every reading with a heart rate, with its accuracy (the records use medium and up)
+        QCOMPARE(rows(), QStringList({row(unreliable, 150, 1), row(low, 90, 2)}));
     }
 
-    void continuousUnknownTimeBaseMeansNow()
+    void aReaderReadsWhileABatchIsWritten()
     {
-        make(true);
-        const qint64 m = QDateTime::currentMSecsSinceEpoch() / 60000 * 60000;
-        const qint64 b1 = m - 3 * 60000;
-        backend()->pushHeartRate(70, AccuracyHigh, timestampFor(b1 + 1000));
-        // a timestamp in the future (not CLOCK_MONOTONIC): dated now
-        backend()->pushHeartRate(90, AccuracyHigh, monotonicUs() + 3600ULL * 1000000);
-        QVERIFY(plugin->minuteStart >= m);
-        QCOMPARE(plugin->minuteSum, 90);
-        // older than two hours: also dated now
-        backend()->pushHeartRate(92, AccuracyHigh, timestampFor(QDateTime::currentMSecsSinceEpoch() - 3 * 3600 * 1000));
-        QVERIFY(plugin->minuteStart >= m);
-        QCOMPARE(testenv::dayLines(prefix, QDateTime::fromMSecsSinceEpoch(b1).date()), QStringList({record(b1, 70)}));
+        make();
+        push(70, 2000);
+        plugin->displayOff();
+        // a reader (btsyncd's health sync) in the middle of a read transaction
+        sqlite3 *reader = nullptr;
+        QCOMPARE(sqlite3_open_v2(QFile::encodeName(heartrateDbPath()).constData(), &reader, SQLITE_OPEN_READWRITE,
+                                 nullptr), SQLITE_OK);
+        QCOMPARE(sqlite3_exec(reader, "BEGIN", nullptr, nullptr, nullptr), SQLITE_OK);
+        sqlite3_stmt *count = nullptr;
+        QCOMPARE(sqlite3_prepare_v2(reader, "SELECT count(*) FROM heartrate", -1, &count, nullptr), SQLITE_OK);
+        QCOMPARE(sqlite3_step(count), SQLITE_ROW);
+        QCOMPARE(sqlite3_column_int(count, 0), 1);
+        sqlite3_reset(count);
+        for (int i = 600; i > 0; i--)
+            push(70, i * 1000LL + 2000);
+        QElapsedTimer took;
+        took.start();
+        plugin->displayOff(); // not held up by the reader
+        QVERIFY(took.elapsed() < 2000);
+        QVERIFY(plugin->m_pending.isEmpty());
+        QCOMPARE(sqlite3_step(count), SQLITE_ROW);
+        QCOMPARE(sqlite3_column_int(count, 0), 1); // the reader's snapshot
+        sqlite3_reset(count);
+        QCOMPARE(sqlite3_exec(reader, "COMMIT", nullptr, nullptr, nullptr), SQLITE_OK);
+        QCOMPARE(sqlite3_step(count), SQLITE_ROW);
+        QCOMPARE(sqlite3_column_int(count, 0), 601);
+        sqlite3_finalize(count);
+        sqlite3_close(reader);
     }
 
-    void continuousStartFailureRetriesWithBackoff()
+    void readingsWaitWhileTheDatabaseCannotBeWritten()
     {
-        FakeSensorBackend::failStarts(type, 1000);
-        QTest::ignoreMessage(QtWarningMsg, "continuous heart rate: retrying in 30 s");
-        make(true);
-        QVERIFY(!plugin->hrmSensor->isActive());
-        QVERIFY(plugin->m_retryTimer->isActive());
-        QCOMPARE(plugin->m_retryTimer->interval(), 30000);
-        for (int delay : {60000, 120000, 240000, 480000, 960000, 1800000, 1800000}) {
-            QVERIFY(QMetaObject::invokeMethod(plugin.get(), "retryContinuous"));
-            QCOMPARE(plugin->m_retryTimer->interval(), delay);
-        }
-        FakeSensorBackend::failStarts(type, 0);
-        QVERIFY(QMetaObject::invokeMethod(plugin.get(), "retryContinuous"));
-        QVERIFY(plugin->hrmSensor->isActive());
-        QCOMPARE(plugin->m_retryDelay, 30000);
-        const qint64 m = QDateTime::currentMSecsSinceEpoch() / 60000 * 60000;
-        backend()->pushHeartRate(70, AccuracyHigh, timestampFor(m - 3 * 60000 + 1000));
-        QCOMPARE(plugin->minuteCount, 1); // the new sensor's readings arrive
+        // the data folder cannot be written: no database yet
+        QFile::setPermissions(testenv::root(), QFile::ReadOwner | QFile::ExeOwner);
+        make();
+        push(70, 3000);
+        push(71, 2000);
+        plugin->displayOff();
+        QCOMPARE(plugin->m_pending.size(), 2);
+        QFile::setPermissions(testenv::root(), QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+        push(72, 1000);
+        plugin->displayOff();
+        QVERIFY(plugin->m_pending.isEmpty());
+        QCOMPARE(rows().size(), 3);
     }
 
-    void continuousRetryTimerFires()
+    void aDamagedDatabaseIsKeptAside()
     {
-        FakeSensorBackend::failStarts(type, 2); // both tries of the first start
-        make(true);
-        QVERIFY(plugin->m_retryTimer->isActive());
-        plugin->m_retryTimer->start(10);
-        QTRY_VERIFY(plugin->hrmSensor->isActive());
+        QDir().mkpath(testenv::root());
+        QFile junk(testenv::root() + "heartrate.db");
+        QVERIFY(junk.open(QIODevice::WriteOnly));
+        junk.write(QByteArray(8192, 'x'));
+        junk.close();
+        make();
+        push(66, 1000);
+        plugin->displayOff();
+        QCOMPARE(rows().size(), 1);
+        const QStringList aside = QDir(testenv::root()).entryList({"heartrate.db.broken-*"}, QDir::Files);
+        QCOMPARE(aside.size(), 1);
+        QCOMPARE(QFileInfo(testenv::root() + aside.first()).size(), 8192);
+    }
+
+    void theIntervalRecordsStayAsTheyWere()
+    {
+        // the Health app's day files: one median record per interval at rest, dated by its reading
+        make(600000);
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        const qint64 start = (now / 600000 - 2) * 600000; // an interval that is over
+        const qint64 base = now - start;
+        QList<qint64> times;
+        const int bpms[] = {62, 60, 61, 64, 63};
+        for (int i = 0; i < 5; i++)
+            times << push(bpms[i], base - i * 60000 - 1000);
+        push(58, base - 5 * 60000, QHrmSensor::AccuracyLow); // below the accuracy the records use
+        plugin->batchIdle();
+        // the median of 60 61 62 63 64, dated when it was taken
+        QCOMPARE(testenv::dayValues("heartrateMonitor", QDateTime::fromMSecsSinceEpoch(times[0]).date()),
+                 QStringList({"62"}));
+        QCOMPARE(testenv::dayTimes("heartrateMonitor", QDateTime::fromMSecsSinceEpoch(times[0]).date()),
+                 QList<qint64>({times[0] / 1000}));
+        // and every reading in the database, the low one too
+        QCOMPARE(rows().size(), 6);
+    }
+
+    void aSecondReadingOfTheSameTimeStampHasTheSameTime()
+    {
+        const quint64 ts = bootUsAgo(1234);
+        const qint64 first = readingWallMs(ts);
+        for (int i = 0; i < 1000; i++)
+            QCOMPARE(readingWallMs(ts), first);
     }
 };
 

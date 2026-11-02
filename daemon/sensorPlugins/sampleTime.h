@@ -21,19 +21,30 @@
  * a batch, or is only read after another suspend, keeps its own time.
  * A time stamp that cannot be one (none, in the future, over a week old)
  * counts as taken now.
+ *
+ * The same time stamp gives the same time whenever it is read (a reading
+ * that comes twice must be found twice in the heart rate database): the
+ * wall clock's offset to CLOCK_BOOTTIME is kept until it moves by more than
+ * WALL_OFFSET_SLACK_US (the clock was set), instead of being taken anew,
+ * with its rounding, for every reading.
  */
+static const qint64 WALL_OFFSET_SLACK_US = 50000;
+
 inline qint64 readingWallMs(quint64 timestampUs)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_BOOTTIME, &ts);
-    const qint64 nowUs = (qint64)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
-    const qint64 wallMs = QDateTime::currentMSecsSinceEpoch();
+    struct timespec boot, wall;
+    clock_gettime(CLOCK_BOOTTIME, &boot);
+    clock_gettime(CLOCK_REALTIME, &wall);
+    const qint64 nowUs = (qint64)boot.tv_sec * 1000000 + boot.tv_nsec / 1000;
+    const qint64 offsetUs = (qint64)wall.tv_sec * 1000000 + wall.tv_nsec / 1000 - nowUs;
+    static qint64 keptOffsetUs = offsetUs;
+    if (qAbs(offsetUs - keptOffsetUs) > WALL_OFFSET_SLACK_US)
+        keptOffsetUs = offsetUs;
     if (timestampUs == 0 || (qint64)timestampUs > nowUs + 1000000)
-        return wallMs;
-    const qint64 ageMs = (nowUs - (qint64)timestampUs) / 1000;
-    if (ageMs > 7LL * 24 * 3600 * 1000)
-        return wallMs;
-    return wallMs - ageMs;
+        return (nowUs + offsetUs) / 1000;
+    if (nowUs - (qint64)timestampUs > 7LL * 24 * 3600 * 1000000)
+        return (nowUs + offsetUs) / 1000;
+    return ((qint64)timestampUs + keptOffsetUs) / 1000;
 }
 
 #endif // SAMPLETIME_H

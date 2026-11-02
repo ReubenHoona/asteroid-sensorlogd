@@ -18,6 +18,7 @@
 
 QString fileNameForDate(QDate date, QString prefix);
 QString sensorDirPath(QString prefix);
+QString heartrateDbPath(); // every heart rate reading (daemon/sensorPlugins/heartrateDb.h), next to the day files
 void fileAddRecord(QString sensorPrefix, QString logdata, QDateTime recordTime = QDateTime::currentDateTime()); //adds a record to today's log file for the given sensor
 QList<QPointF> readDayRecords(const QString &path); // time:value records of a day file; none (quietly) if nothing was logged that day
 void setupFilePath(QString sensorPrefix); //sets up the paths for sensors to write into

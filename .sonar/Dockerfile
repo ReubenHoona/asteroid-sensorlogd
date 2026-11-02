@@ -8,7 +8,7 @@ FROM debian:trixie-20261005-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         g++ make cmake gcovr \
-        qt6-base-dev qt6-sensors-dev \
+        qt6-base-dev qt6-sensors-dev libsqlite3-dev pkgconf \
         dbus-daemon dbus-bin dbus-session-bus-common \
     && rm -rf /var/lib/apt/lists/*
 

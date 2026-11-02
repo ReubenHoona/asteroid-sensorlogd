@@ -112,8 +112,12 @@ void Logger::resetup() {
 }
 
 void Logger::displayOn(QString displayState) {
-    if (displayState == "off")
+    if (displayState == "off") {
+        // the system may sleep now: the live heart rate readings go to the database first
+        if (heartrateSensorEnabled && m_heartrateSensor)
+            m_heartrateSensor->displayOff();
         return;
+    }
     // the system is awake anyway: the sensor hub hands over its batch now
     // (the eos hub plugin flushes at display on); write what is due
     qDebug() << "display on detected";

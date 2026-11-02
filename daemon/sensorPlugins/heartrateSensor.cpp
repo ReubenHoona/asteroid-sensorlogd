@@ -26,9 +26,18 @@
 // a batch is over when no reading came for this long
 static const int BATCH_IDLE_MS = 2000;
 static const qint64 MINUTE_MS = 60000;
+// a reading this old when it arrives came in a batch
+static const qint64 LIVE_AGE_MS = 5000;
+// a batch goes to the database this long after its last reading: well within
+// the sensor hub's wake hold after a batch (usf/wakeup_batch_hold_ms, 1.5 s)
+static const int BATCH_COMMIT_MS = 250;
+// live readings go to the database at least this often
+static const int LIVE_COMMIT_MS = 60000;
+// readings kept in memory while the database cannot be written (a day's)
+static const int MAX_PENDING = 24 * 3600;
 
 HeartrateSensorPlugin::HeartrateSensorPlugin(QObject *parent, QSettings *settings, int interval) :
-    QObject(parent), m_settings(settings)
+    QObject(parent), m_settings(settings), m_db(heartrateDbPath())
 {
     m_interval = qMax(60000, interval);
     // QHrmSensor::Status: 0 no contact, 1 unreliable, 2 low, 3 medium, 4 high
@@ -48,6 +57,9 @@ HeartrateSensorPlugin::HeartrateSensorPlugin(QObject *parent, QSettings *setting
     m_idleTimer->setSingleShot(true);
     m_idleTimer->setInterval(BATCH_IDLE_MS);
     connect(m_idleTimer, &QTimer::timeout, this, &HeartrateSensorPlugin::batchIdle);
+    m_commitTimer = new QTimer(this);
+    m_commitTimer->setSingleShot(true);
+    connect(m_commitTimer, &QTimer::timeout, this, &HeartrateSensorPlugin::commitReadings);
 
     if (m_settings->contains("heartrateSensor/continuous"))
         qDebug() << "heartrateSensor/continuous is no longer used: the heart rate is measured all the time";
@@ -59,6 +71,7 @@ HeartrateSensorPlugin::HeartrateSensorPlugin(QObject *parent, QSettings *setting
 HeartrateSensorPlugin::~HeartrateSensorPlugin()
 {
     closeInterval(); // what was collected so far is not lost on a restart
+    commitReadings();
 }
 
 void HeartrateSensorPlugin::makeSensor()
@@ -95,11 +108,13 @@ void HeartrateSensorPlugin::readingReceived()
         return;
     const qint64 taken = readingWallMs(reading->timestamp());
     const int bpm = reading->bpm();
+    const int status = (int)m_sensor->status();
     m_idleTimer->start();
+    keepReading(taken, bpm, status);
     if (taken <= m_lastLoggedMs)
         return; // already in the files (sensorfw replays the last reading at a start)
     m_readings++;
-    if (bpm <= 0 || (int)m_sensor->status() < m_minStatus) {
+    if (bpm <= 0 || status < m_minStatus) {
         m_unusable++;
         return;
     }
@@ -110,8 +125,38 @@ void HeartrateSensorPlugin::readingReceived()
     m_samples.append({taken, bpm});
 }
 
+// every reading with a heart rate, for the database (late, out of order and
+// repeated ones too: the database keeps each time once)
+void HeartrateSensorPlugin::keepReading(qint64 takenMs, int bpm, int status)
+{
+    if (bpm <= 0 || status <= QHrmSensor::NoContact)
+        return; // not worn: no heart rate
+    m_pending.append({takenMs, bpm, status});
+    if (takenMs < QDateTime::currentMSecsSinceEpoch() - LIVE_AGE_MS)
+        m_commitTimer->start(BATCH_COMMIT_MS); // a batch: written once it is over
+    else if (!m_commitTimer->isActive())
+        m_commitTimer->start(LIVE_COMMIT_MS);
+}
+
+void HeartrateSensorPlugin::commitReadings()
+{
+    m_commitTimer->stop();
+    if (m_pending.isEmpty())
+        return;
+    if (m_db.add(m_pending))
+        m_pending.clear();
+    else if (m_pending.size() > MAX_PENDING) // tried again with the next reading; the oldest go
+        m_pending.remove(0, m_pending.size() - MAX_PENDING);
+}
+
+void HeartrateSensorPlugin::displayOff()
+{
+    commitReadings();
+}
+
 void HeartrateSensorPlugin::batchIdle()
 {
+    commitReadings();
     // the interval the last batch ended in is complete once its time is over
     if (m_open >= 0 && (m_open + 1) * m_interval <= QDateTime::currentMSecsSinceEpoch())
         closeInterval();
@@ -126,6 +171,7 @@ void HeartrateSensorPlugin::triggerRecording()
 {
     // asked over D-Bus: write what the open interval has so far
     closeInterval();
+    commitReadings();
 }
 
 void HeartrateSensorPlugin::closeInterval()

@@ -18,6 +18,8 @@ include(Asteroid6CMakeSettings)
 
 find_package(Qt6 COMPONENTS Core DBus Qml Sensors REQUIRED)
 pkg_check_modules(mlite6 REQUIRED mlite6)
+# every heart rate reading (daemon/sensorPlugins/heartrateDb.h)
+pkg_check_modules(sqlite3 REQUIRED sqlite3)
 
 add_subdirectory(daemon)
 add_subdirectory(qmlplugin)

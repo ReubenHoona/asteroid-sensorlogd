@@ -18,18 +18,29 @@
 
 #include <QtSensors/QHrmSensor>
 
+#include "heartrateDb.h"
+
 class QSettings;
 
 /*
  * Heart rate, measured all the time by the sensor (on eos: the sensor hub
  * runs the algorithm and batches the readings while the system sleeps, as
  * on Wear OS). The sensor is started once and stays on; readings arrive
- * live or in batches, each with the time it was taken. One record per
- * interval (heartrateSensor/interval) is written, dated by its reading: the
- * median usable reading of that interval. When the heart rate moves within
- * an interval (activity: more than heartrateSensor/activeSpread bpm between
- * its lowest and highest reading) a record per minute is written instead.
- * Nothing here wakes the system: records are written when readings arrive.
+ * live or in batches, each with the time it was taken.
+ *
+ * Every reading with a heart rate goes to the heart rate database
+ * (heartrateDb.h), with its time and accuracy: a batch in one transaction
+ * when it is over, live readings once a minute and when the display goes
+ * off. Readings that come late, out of order or twice are kept once each,
+ * in time order.
+ *
+ * The day files keep one record per interval (heartrateSensor/interval) for
+ * the Health app, dated by its reading: the median usable reading of that
+ * interval. When the heart rate moves within an interval (activity: more
+ * than heartrateSensor/activeSpread bpm between its lowest and highest
+ * reading) a record per minute is written instead.
+ *
+ * Nothing here wakes the system: everything is written when readings arrive.
  */
 class HeartrateSensorPlugin : public QObject
 {
@@ -40,6 +51,9 @@ public:
 
     // the system is awake anyway (display on): close an interval that is over
     void timeUpdate();
+    // the display goes off: the live readings so far go to the database
+    // before the system may sleep
+    void displayOff();
 
 public slots:
     void triggerRecording();
@@ -48,6 +62,7 @@ private slots:
     void readingReceived();
     void retryStart();
     void batchIdle();
+    void commitReadings();
 
 private:
     struct Sample {
@@ -56,6 +71,7 @@ private:
     };
     void makeSensor();
     void startSensor();
+    void keepReading(qint64 takenMs, int bpm, int status);
     void closeInterval();
     void writeRecord(const QVector<Sample> &samples);
 
@@ -72,6 +88,10 @@ private:
     QVector<Sample> m_samples;  // its usable readings
     int m_readings = 0;         // all readings since the last record, for the journal
     int m_unusable = 0;
+
+    HeartrateDb m_db;
+    QVector<HeartrateDb::Reading> m_pending; // readings not in the database yet
+    QTimer *m_commitTimer;
 
     const QString sensorPathPrefix = "heartrateMonitor";
 };

@@ -26,6 +26,11 @@ QString sensorDirPath(QString prefix) {
     return settings.value("loggerRootPath", QStandardPaths::writableLocation(QStandardPaths::HomeLocation) + "/.asteroid-sensorlogd/").toString() + prefix + "/";
 }
 
+QString heartrateDbPath() {
+    QSettings settings("asteroid", "sensorlogd");
+    return settings.value("loggerRootPath", QStandardPaths::writableLocation(QStandardPaths::HomeLocation) + "/.asteroid-sensorlogd/").toString() + "heartrate.db";
+}
+
 void fileAddRecord(QString sensorPrefix, QString logdata, QDateTime recordTime) { //adds a record to today's log file for the given sensor
     QFile file(fileNameForDate(recordTime.date(), sensorPrefix));
     if (!file.open(QIODevice::ReadWrite | QIODevice::Text)) {

@@ -17,6 +17,8 @@ option(SENSORLOGD_COVERAGE "compile the sources under test with gcc --coverage" 
 set(SENSORLOGD_JUNIT_DIR "" CACHE PATH "write each test program's results as JUnit XML into this folder")
 
 find_package(Qt6 REQUIRED COMPONENTS Core DBus Sensors Test)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
 enable_testing()
 
 set(top ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -41,21 +43,22 @@ add_library(sensorlogd-undertest STATIC
     ${top}/daemon/logger.cpp ${top}/daemon/logger.h
     ${top}/daemon/sensorPlugins/stepCounter.cpp ${top}/daemon/sensorPlugins/stepCounter.h
     ${top}/daemon/sensorPlugins/heartrateSensor.cpp ${top}/daemon/sensorPlugins/heartrateSensor.h
+    ${top}/daemon/sensorPlugins/heartrateDb.cpp ${top}/daemon/sensorPlugins/heartrateDb.h
     ${top}/daemon/sensorPlugins/barometerSensor.cpp ${top}/daemon/sensorPlugins/barometerSensor.h
     ${top}/qmlplugin/stepsDataLoader.cpp ${top}/qmlplugin/stepsDataLoader.h
     ${top}/qmlplugin/hrDataLoader.cpp ${top}/qmlplugin/hrDataLoader.h
     ${top}/qmlplugin/weightDataLoader.cpp ${top}/qmlplugin/weightDataLoader.h
     ${top}/qmlplugin/barometerDataLoader.cpp ${top}/qmlplugin/barometerDataLoader.h
 )
-target_link_libraries(sensorlogd-undertest PUBLIC sensorlogd-testsupport)
+target_link_libraries(sensorlogd-undertest PUBLIC sensorlogd-testsupport PkgConfig::SQLITE3)
 if(SENSORLOGD_COVERAGE)
     target_compile_options(sensorlogd-undertest PRIVATE -O0 -g --coverage)
     target_link_options(sensorlogd-undertest PUBLIC --coverage)
 endif()
 
-# tst_stepcounter, tst_heartrate and tst_logger test the timer-driven plugins from before the sensor hub's batches
-# (108b628) and are not built until they are brought up to it
-foreach(name common barometer dataloaders)
+# tst_stepcounter and tst_logger test the timer-driven plugins from before the sensor hub's batches (108b628) and
+# are not built until they are brought up to it; tst_heartrate tests the batched heart rate and its database.
+foreach(name common heartrate barometer dataloaders)
     add_executable(tst_${name} tst_${name}.cpp testenv.h peek.h)
     target_link_libraries(tst_${name} PRIVATE sensorlogd-undertest)
     if(SENSORLOGD_JUNIT_DIR)

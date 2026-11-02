@@ -7,6 +7,8 @@ add_executable(
     sensorPlugins/stepCounter.h
     sensorPlugins/heartrateSensor.cpp
     sensorPlugins/heartrateSensor.h
+    sensorPlugins/heartrateDb.cpp
+    sensorPlugins/heartrateDb.h
     sensorPlugins/barometerSensor.cpp
     sensorPlugins/barometerSensor.h
     sensorPlugins/sampleTime.h
@@ -23,8 +25,9 @@ target_link_libraries(
         Qt::Qml
         Qt::Sensors
         ${mlite6_LIBRARIES}
+        ${sqlite3_LIBRARIES}
 )
-target_include_directories(sensorlogd PRIVATE ${mlite6_INCLUDE_DIRS})
+target_include_directories(sensorlogd PRIVATE ${mlite6_INCLUDE_DIRS} ${sqlite3_INCLUDE_DIRS})
 install(TARGETS sensorlogd DESTINATION bin)
 install(
     FILES systemd/asteroid-sensorlogd.service
