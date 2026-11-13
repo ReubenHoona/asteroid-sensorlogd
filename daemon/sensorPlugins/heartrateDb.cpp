@@ -137,3 +137,32 @@ bool HeartrateDb::add(const QVector<Reading> &readings)
     m_lastAdded = added;
     return true;
 }
+
+QVector<HeartrateDb::MinuteMean> HeartrateDb::minuteMeans(const QString &path, qint64 fromMs, qint64 toMs, int minAccuracy)
+{
+    QVector<MinuteMean> out;
+    if (!QFile::exists(path))
+        return out;
+    sqlite3 *db = nullptr;
+    if (sqlite3_open_v2(QFile::encodeName(path).constData(), &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nullptr)
+            != SQLITE_OK) {
+        sqlite3_close(db);
+        return out;
+    }
+    sqlite3_busy_timeout(db, BUSY_TIMEOUT_MS);
+    sqlite3_stmt *st = nullptr;
+    // the time is the table's key: a range of its b-tree; time / 60000 groups the minutes (times are positive)
+    if (sqlite3_prepare_v2(db,
+                           "SELECT time / 60000, AVG(bpm), COUNT(*) FROM heartrate "
+                           "WHERE time >= ? AND time < ? AND accuracy >= ? GROUP BY time / 60000 ORDER BY time / 60000",
+                           -1, &st, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(st, 1, fromMs);
+        sqlite3_bind_int64(st, 2, toMs);
+        sqlite3_bind_int(st, 3, minAccuracy);
+        while (sqlite3_step(st) == SQLITE_ROW)
+            out.append({sqlite3_column_int64(st, 0), sqlite3_column_double(st, 1), sqlite3_column_int(st, 2)});
+    }
+    sqlite3_finalize(st);
+    sqlite3_close(db);
+    return out;
+}

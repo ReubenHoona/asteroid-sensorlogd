@@ -46,6 +46,13 @@ public:
         int accuracy;   // QHrmSensor::Status
     };
 
+    // the readings of a minute, for the Health metrics (zones, Active Zone Minutes, sleep, resting heart rate)
+    struct MinuteMean {
+        qint64 minute; // ms since the epoch / 60000
+        double bpm;    // the mean of the minute's readings
+        int count;
+    };
+
     explicit HeartrateDb(const QString &path);
     ~HeartrateDb();
 
@@ -57,6 +64,11 @@ public:
     int lastAdded() const { return m_lastAdded; }
 
     const QString &path() const { return m_path; }
+
+    // The mean heart rate of every minute with a reading of at least minAccuracy in [fromMs, toMs), in time
+    // order. Reads through a connection of its own, read-only (the daemon writes in WAL mode meanwhile); a
+    // database that is not there or cannot be read gives none, quietly, and is never made.
+    static QVector<MinuteMean> minuteMeans(const QString &path, qint64 fromMs, qint64 toMs, int minAccuracy = 3);
 
 private:
     bool open();

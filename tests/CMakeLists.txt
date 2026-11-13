@@ -49,6 +49,18 @@ add_library(sensorlogd-undertest STATIC
     ${top}/qmlplugin/hrDataLoader.cpp ${top}/qmlplugin/hrDataLoader.h
     ${top}/qmlplugin/weightDataLoader.cpp ${top}/qmlplugin/weightDataLoader.h
     ${top}/qmlplugin/barometerDataLoader.cpp ${top}/qmlplugin/barometerDataLoader.h
+    ${top}/qmlplugin/healthMetricsLoader.cpp ${top}/qmlplugin/healthMetricsLoader.h
+    ${top}/qmlplugin/sleepDataLoader.cpp ${top}/qmlplugin/sleepDataLoader.h
+    ${top}/qmlplugin/loggerSettings.cpp ${top}/qmlplugin/loggerSettings.h
+    ${top}/daemon/healthMonitor.cpp ${top}/daemon/healthMonitor.h
+    ${top}/daemon/healthNotifier.cpp ${top}/daemon/healthNotifier.h
+    ${top}/metrics/healthProfile.cpp ${top}/metrics/healthProfile.h
+    ${top}/metrics/healthMetrics.cpp ${top}/metrics/healthMetrics.h
+    ${top}/metrics/hrAlerts.cpp ${top}/metrics/hrAlerts.h
+    ${top}/metrics/moveReminder.cpp ${top}/metrics/moveReminder.h
+    ${top}/metrics/sleepEstimator.cpp ${top}/metrics/sleepEstimator.h
+    ${top}/metrics/autoExercise.cpp ${top}/metrics/autoExercise.h
+    ${top}/metrics/healthData.cpp ${top}/metrics/healthData.h
 )
 target_link_libraries(sensorlogd-undertest PUBLIC sensorlogd-testsupport PkgConfig::SQLITE3)
 if(SENSORLOGD_COVERAGE)
@@ -58,7 +70,7 @@ endif()
 
 # tst_stepcounter and tst_logger test the timer-driven plugins from before the sensor hub's batches (108b628) and
 # are not built until they are brought up to it; tst_heartrate tests the batched heart rate and its database.
-foreach(name common heartrate barometer dataloaders)
+foreach(name common heartrate barometer dataloaders health monitor healthloaders)
     add_executable(tst_${name} tst_${name}.cpp testenv.h peek.h)
     target_link_libraries(tst_${name} PRIVATE sensorlogd-undertest)
     if(SENSORLOGD_JUNIT_DIR)

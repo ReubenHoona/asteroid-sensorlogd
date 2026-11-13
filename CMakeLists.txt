@@ -21,6 +21,17 @@ pkg_check_modules(mlite6 REQUIRED mlite6)
 # every heart rate reading (daemon/sensorPlugins/heartrateDb.h)
 pkg_check_modules(sqlite3 REQUIRED sqlite3)
 
+# the Health metrics (distance, energy, floors, zones, alerts, reminders, sleep, auto exercise), shared by the
+# daemon and the QML plugin
+set(HEALTH_METRICS_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/metrics/healthProfile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metrics/healthMetrics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metrics/hrAlerts.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metrics/moveReminder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metrics/sleepEstimator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metrics/autoExercise.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metrics/healthData.cpp
+)
 add_subdirectory(daemon)
 add_subdirectory(qmlplugin)
 

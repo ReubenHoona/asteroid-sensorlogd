@@ -141,6 +141,8 @@ void StepCounterPlugin::readingReceived()
         return;
     const int rawSteps = reading->steps();
     const qint64 taken = readingWallMs(reading->timestamp());
+    const int previousRaw = m_lastRawSteps;
+    const bool first = !m_offsetReady;
     m_idleTimer->start();
     if (!m_offsetReady) {
         if (rawSteps > 0)
@@ -170,6 +172,7 @@ void StepCounterPlugin::readingReceived()
             // after them. Counted to the current day they were written into
             // the earlier day's file as a small count, read as its total.
             m_lastReadingMs = taken;
+            announceSteps(taken, rawSteps, previousRaw, first);
             if (rawSteps > m_stepsOffset) {
                 const int dayTotal = qMax(0, fileGetPrevRecord(sensorPathPrefix,
                                                                QDateTime(takenDay, QTime(23, 59, 59)))[1].toInt());
@@ -184,6 +187,7 @@ void StepCounterPlugin::readingReceived()
     if (taken < m_lastReadingMs)
         return; // older than what was counted already (a replayed reading)
     m_lastReadingMs = taken;
+    announceSteps(taken, rawSteps, previousRaw, first);
     const int steps = rawSteps - m_stepsOffset;
     if (rawSteps <= 0 || steps < 0)
         return;
@@ -193,6 +197,16 @@ void StepCounterPlugin::readingReceived()
     m_open = at;
     m_pendingSteps = steps;
     m_pendingMs = taken;
+}
+
+// the steps this reading added to the counter; the counter started again if it went down
+void StepCounterPlugin::announceSteps(qint64 takenMs, int rawSteps, int previousRaw, bool first)
+{
+    if (first || rawSteps <= 0)
+        return;
+    const int added = rawSteps >= previousRaw ? rawSteps - previousRaw : rawSteps;
+    if (added > 0)
+        emit stepsTaken(takenMs, added);
 }
 
 void StepCounterPlugin::writePending()
@@ -221,6 +235,7 @@ void StepCounterPlugin::batchIdle()
         if (m_offsetReady && QDate::currentDate() > m_day)
             newDay(QDate::currentDate());
     }
+    emit batchSettled();
 }
 
 void StepCounterPlugin::timeUpdate()

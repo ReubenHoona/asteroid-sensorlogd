@@ -17,8 +17,14 @@ public:
     QVariant value() const { return store().value(m_key); }
     QVariant value(const QVariant &def) const { return store().value(m_key, def); }
 
+    void set(const QVariant &value) { store().insert(m_key, value); emit valueChanged(); }
+
     static void setTestValue(const QString &key, const QVariant &value) { store().insert(key, value); }
     static void clearTestValues() { store().clear(); }
+    static QVariant testValue(const QString &key) { return store().value(key); }
+
+signals:
+    void valueChanged();
 
 private:
     static QHash<QString, QVariant> &store()

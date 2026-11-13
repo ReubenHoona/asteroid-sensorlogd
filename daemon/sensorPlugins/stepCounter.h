@@ -41,6 +41,14 @@ public:
 public slots:
     void triggerRecording();
 
+signals:
+    // The steps a reading added to the counter, with the time the reading was taken (the Health monitor builds
+    // the minutes of activity from them, as the sensor hub delivers them). Not for the first reading of a
+    // start (what was counted before is not known), a replayed one or a counter that is only restarting.
+    void stepsTaken(qint64 takenMs, int steps);
+    // a batch of readings is over (nothing came for a moment), as the day file is current
+    void batchSettled();
+
 private slots:
     void readingReceived();
     void retryStart();
@@ -52,6 +60,7 @@ private:
     void settleOffset(int rawSteps);
     void newDay(const QDate &day);
     void writePending();
+    void announceSteps(qint64 takenMs, int rawSteps, int previousRaw, bool first);
 
     bool m_daemonFresh;
     bool m_offsetReady = false; // m_stepsOffset is known (needs a first reading)

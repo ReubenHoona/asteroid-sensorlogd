@@ -12,6 +12,9 @@
 
 #include "loggerSettings.h"
 
+static const char *const STEPS_GOAL_KEY = "/org/asteroidos/ux/steps-goal";
+static const int DEFAULT_STEPS_GOAL = 10000;
+
 LoggerSettings::LoggerSettings()
     : QObject()
 {
@@ -22,6 +25,8 @@ LoggerSettings::LoggerSettings()
     } else {
         qDebug() << "interface is valid";
     }
+    m_goal = new MDConfItem(STEPS_GOAL_KEY, this);
+    connect(m_goal, &MDConfItem::valueChanged, this, &LoggerSettings::stepGoalChanged);
 }
 
 void LoggerSettings::reInitLogger()
@@ -69,20 +74,63 @@ void LoggerSettings::setStepCounterInterval(int value)
     this->m_settings->setValue("stepCounter/interval", value);
 }
 
+// One goal for everything (stock: the main goal, steps by default): the dconf key the tile, the complications
+// and the celebrations read. The goal0 keys of the old settings page are not used any more.
 bool LoggerSettings::getStepGoalEnabled()
 {
-    return this->m_settings->value("stepCounter/goal0/enabled", false).toBool();
+    return true;
 }
-void LoggerSettings::setStepGoalEnabled(bool value)
+
+void LoggerSettings::setStepGoalEnabled(bool)
 {
-    this->m_settings->setValue("stepCounter/goal0/enabled", value);
 }
+
 int LoggerSettings::getStepGoalTarget()
 {
-    return this->m_settings->value("stepCounter/goal0/target", 0).toInt();
+    return qMax(1, m_goal->value(DEFAULT_STEPS_GOAL).toInt());
 }
 
 void LoggerSettings::setStepGoalTarget(int value)
 {
-    this->m_settings->setValue("stepCounter/goal0/target", value);
+    if (value < 1)
+        return;
+    m_goal->set(value);
+}
+
+void LoggerSettings::healthSet(const char *key, const QVariant &value)
+{
+    if (m_settings->value(key) == value && m_settings->contains(key))
+        return;
+    m_settings->setValue(key, value);
+    m_settings->sync();
+    m_iface->asyncCall("healthSettingsChanged");
+    emit healthChanged();
+}
+
+bool LoggerSettings::getRemindersEnabled() { return m_settings->value("reminders/enabled", false).toBool(); }
+void LoggerSettings::setRemindersEnabled(bool value) { healthSet("reminders/enabled", value); }
+int LoggerSettings::getRemindersStartHour() { return m_settings->value("reminders/startHour", 9).toInt(); }
+void LoggerSettings::setRemindersStartHour(int value) { healthSet("reminders/startHour", qBound(0, value, 23)); }
+int LoggerSettings::getRemindersEndHour() { return m_settings->value("reminders/endHour", 18).toInt(); }
+void LoggerSettings::setRemindersEndHour(int value) { healthSet("reminders/endHour", qBound(1, value, 24)); }
+int LoggerSettings::getRemindersDays() { return m_settings->value("reminders/days", 0x7f).toInt(); }
+void LoggerSettings::setRemindersDays(int value) { healthSet("reminders/days", value & 0x7f); }
+
+bool LoggerSettings::getHrAlertHighEnabled() { return m_settings->value("hrAlerts/highEnabled", true).toBool(); }
+void LoggerSettings::setHrAlertHighEnabled(bool value) { healthSet("hrAlerts/highEnabled", value); }
+int LoggerSettings::getHrAlertHighBpm() { return m_settings->value("hrAlerts/highBpm", 0).toInt(); }
+void LoggerSettings::setHrAlertHighBpm(int value) { healthSet("hrAlerts/highBpm", qMax(0, value)); }
+bool LoggerSettings::getHrAlertLowEnabled() { return m_settings->value("hrAlerts/lowEnabled", true).toBool(); }
+void LoggerSettings::setHrAlertLowEnabled(bool value) { healthSet("hrAlerts/lowEnabled", value); }
+int LoggerSettings::getHrAlertLowBpm() { return m_settings->value("hrAlerts/lowBpm", 0).toInt(); }
+void LoggerSettings::setHrAlertLowBpm(int value) { healthSet("hrAlerts/lowBpm", qMax(0, value)); }
+
+bool LoggerSettings::getAutoStartEnabled() { return m_settings->value("autoExercise/start", true).toBool(); }
+void LoggerSettings::setAutoStartEnabled(bool value) { healthSet("autoExercise/start", value); }
+bool LoggerSettings::getAutoStopEnabled() { return m_settings->value("autoExercise/stop", true).toBool(); }
+void LoggerSettings::setAutoStopEnabled(bool value) { healthSet("autoExercise/stop", value); }
+
+void LoggerSettings::setWorkoutActive(bool active)
+{
+    m_iface->asyncCall("setWorkoutActive", active);
 }

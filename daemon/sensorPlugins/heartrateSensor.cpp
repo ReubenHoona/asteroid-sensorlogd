@@ -123,6 +123,7 @@ void HeartrateSensorPlugin::readingReceived()
         closeInterval();
     m_open = interval;
     m_samples.append({taken, bpm});
+    emit heartReading(taken, bpm);
 }
 
 // every reading with a heart rate, for the database (late, out of order and
@@ -160,6 +161,7 @@ void HeartrateSensorPlugin::batchIdle()
     // the interval the last batch ended in is complete once its time is over
     if (m_open >= 0 && (m_open + 1) * m_interval <= QDateTime::currentMSecsSinceEpoch())
         closeInterval();
+    emit batchSettled();
 }
 
 void HeartrateSensorPlugin::timeUpdate()

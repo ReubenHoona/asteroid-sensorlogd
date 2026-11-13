@@ -24,6 +24,8 @@
 #include "sensorPlugins/stepCounter.h"
 #include "sensorPlugins/heartrateSensor.h"
 #include "sensorPlugins/barometerSensor.h"
+#include "healthMonitor.h"
+#include "healthNotifier.h"
 
 /*
  * Heart rate and steps are measured all the time by their sensors, which on
@@ -32,6 +34,10 @@
  * records when readings arrive, dated by the readings. Nothing here wakes
  * the system: the barometer is read on an interval timer that only runs
  * while the system is awake, and at display on.
+ *
+ * The Health monitor (healthMonitor.h) works on the same readings: heart rate
+ * alerts, reminders to move, the steps goal, exercise prompts and the sleep
+ * estimate, looked at when the hub delivers a batch.
  */
 class Logger : public QObject
 {
@@ -43,6 +49,17 @@ public slots:
     void setup();
     void resetup();
     void triggerRecording();
+    // the Health app changed reminders/*, hrAlerts/* or autoExercise/* (or the profile): read them again
+    void healthSettingsChanged();
+    // the Exercise app has a workout going or not
+    void setWorkoutActive(bool active);
+    // the time of the next reminder to move (ms since the epoch), -1 if none
+    qlonglong nextReminderAt();
+signals:
+    // the steps goal was reached for the first time today (metric "steps")
+    void goalReached(const QString &metric, int value, int goal);
+    // auto-detected exercise: action "start" (activity "walking" / "running") or "stop"
+    void exerciseOffered(const QString &action, const QString &activity, qlonglong sinceMs);
 private slots:
     void displayOn(QString displayState);
     void sensorfwRegistered();
@@ -57,6 +74,8 @@ private:
     StepCounterPlugin *m_stepCounter = nullptr;
     bool barometerEnabled = false;
     BarometerSensorPlugin *m_barometerSensor = nullptr;
+    DBusNotificationPoster m_poster;
+    HealthMonitor *m_health = nullptr;
     bool daemonFresh;
     QSettings *settings;
     bool getDaemonFresh();

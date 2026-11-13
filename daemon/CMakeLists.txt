@@ -12,6 +12,11 @@ add_executable(
     sensorPlugins/barometerSensor.cpp
     sensorPlugins/barometerSensor.h
     sensorPlugins/sampleTime.h
+    healthMonitor.cpp
+    healthMonitor.h
+    healthNotifier.cpp
+    healthNotifier.h
+    ${HEALTH_METRICS_SOURCES}
     ../common.cpp
     ../common.h
 )

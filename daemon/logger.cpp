@@ -68,6 +68,8 @@ void Logger::sensorfwRegistered() {
 }
 
 void Logger::deletePlugins() {
+    delete m_health; // before the plugins it listens to
+    m_health = nullptr;
     delete m_heartrateSensor;
     m_heartrateSensor = nullptr;
     delete m_stepCounter;
@@ -100,6 +102,12 @@ void Logger::setup() {
         m_barometerSensor = new BarometerSensorPlugin(this,settings->value("barometer/interval",600000).toInt());
     }
 
+    m_health = new HealthMonitor(settings, &m_poster, this);
+    m_health->attach(m_stepCounter, m_heartrateSensor);
+    connect(m_health, &HealthMonitor::goalReached, this, &Logger::goalReached);
+    connect(m_health, &HealthMonitor::exerciseOffered, this, &Logger::exerciseOffered);
+    m_health->start();
+
     qDebug() << "sensorlogd setup complete";
     if (barometerEnabled)
         m_barometerSensor->triggerRecording();
@@ -122,6 +130,9 @@ void Logger::displayOn(QString displayState) {
     // (the eos hub plugin flushes at display on); write what is due
     qDebug() << "display on detected";
 
+    if (m_health)
+        m_health->displayOn();
+
     if (heartrateSensorEnabled) {
         m_heartrateSensor->timeUpdate();
     }
@@ -133,6 +144,21 @@ void Logger::displayOn(QString displayState) {
     if (barometerEnabled) {
         m_barometerSensor->timeUpdate();
     }
+}
+
+void Logger::healthSettingsChanged() {
+    settings->sync();
+    if (m_health)
+        m_health->reloadSettings();
+}
+
+void Logger::setWorkoutActive(bool active) {
+    if (m_health)
+        m_health->setWorkoutActive(active);
+}
+
+qlonglong Logger::nextReminderAt() {
+    return m_health ? m_health->nextReminderMs() : -1;
 }
 
 void Logger::triggerRecording() {

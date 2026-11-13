@@ -1,0 +1,138 @@
+/*
+ * This file is part of sensorlogd, a sensor logger for the AsteroidOS smartwatch OS.
+ *
+ * sensorlogd is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+ * sensorlogd is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#ifndef HEALTHMONITOR_H
+#define HEALTHMONITOR_H
+
+#include <functional>
+
+#include <QDate>
+#include <QDateTime>
+#include <QObject>
+#include <QSettings>
+#include <QTimer>
+
+#include <MDConfItem>
+
+#include "healthNotifier.h"
+#include "../metrics/autoExercise.h"
+#include "../metrics/healthMetrics.h"
+#include "../metrics/hrAlerts.h"
+#include "../metrics/moveReminder.h"
+
+class StepCounterPlugin;
+class HeartrateSensorPlugin;
+
+/*
+ * What the Health app does on its own account while the watch is worn: high and low heart rate alerts
+ * (health-fitness-16), reminders to move and their celebrations (-15), the steps goal reached (-10, -14),
+ * auto-detected exercise prompts (-28) and the nightly sleep estimate (-17).
+ *
+ * The monitor is fed by the readings the sensor hub delivers (the plugins' stepsTaken and heartReading, with
+ * the time each reading was taken) and looks at them when a delivery is over (the plugins' batchSettled), when
+ * a live heart rate reading begins a new minute, and at display on. It has no periodic timer. The only timer
+ * besides the short settle delay is one single-shot to the next reminder minute of the window, started only
+ * while reminders are on; like every Qt timer it does not run while the system is suspended, so a reminder
+ * whose minute passed in suspend is made, if its hour is not over, when data arrives next: the sensor hub's
+ * batch or a display on.
+ *
+ * Settings (QSettings asteroid/sensorlogd, written by the Health app through LoggerSettings):
+ *   reminders/enabled (false), reminders/startHour (9), reminders/endHour (18), reminders/days (127)
+ *   hrAlerts/highEnabled (true), hrAlerts/highBpm (0: the default for age and resting rate),
+ *   hrAlerts/lowEnabled (true), hrAlerts/lowBpm (0)
+ *   autoExercise/start (true), autoExercise/stop (true)
+ * The steps goal is the dconf key /org/asteroidos/ux/steps-goal (10000), the profile the keys of healthProfile.h.
+ */
+class HealthMonitor : public QObject
+{
+    Q_OBJECT
+public:
+    static const int SETTLE_MS = 500;          // after a batch is over
+    static const int DISPLAY_SETTLE_MS = 2500; // after display on, if no batch follows
+    static const int LIVE_AGE_MS = 5000;       // a reading younger than this is live, not from a batch
+    static const int WORN_MS = 15 * 60 * 1000; // a heart rate this recent: the watch is on the wrist
+    static const int HISTORY_HOURS = 6;        // minutes before today kept in memory
+
+    explicit HealthMonitor(QSettings *settings, NotificationPoster *poster, QObject *parent = nullptr);
+    ~HealthMonitor() override;
+
+    // reads today's steps and the recent heart rate from what is logged, and begins to look at the minutes from now
+    void start();
+    void attach(StepCounterPlugin *steps, HeartrateSensorPlugin *heart);
+    // the clock the monitor goes by (ms since the epoch); the system's by default
+    void setClock(std::function<qint64()> clock) { m_clock = clock; }
+
+    void reloadSettings();
+    // the display came on: what the hub batched is delivered now; look at it once it is in
+    void displayOn();
+    // the Exercise app has a workout going (for the "Finished working out?" prompt)
+    void setWorkoutActive(bool active);
+    // the time of the next reminder minute, ms since the epoch; -1: none
+    qint64 nextReminderMs() const;
+
+    void ingestSteps(qint64 takenMs, int steps);
+    void ingestHeart(qint64 takenMs, int bpm);
+    // looks at the minutes that are over and does what they call for
+    void evaluate();
+
+    const Health::MinuteSeries &series() const { return m_series; }
+
+signals:
+    // a daily goal was reached for the first time today (metric "steps"): the launcher's celebration
+    void goalReached(const QString &metric, int value, int goal);
+    // auto-detected exercise: action "start" (activity "walking" / "running") or "stop"
+    void exerciseOffered(const QString &action, const QString &activity, qlonglong sinceMs);
+
+private slots:
+    void batchSettled();
+
+private:
+    struct Settings {
+        Health::MoveReminderSettings reminders;
+        Health::HrAlertThresholds hrAlerts;
+        Health::AutoExerciseSettings exercise;
+    };
+    qint64 now() const { return m_clock ? m_clock() : QDateTime::currentMSecsSinceEpoch(); }
+    void loadProfile(bool force = false);
+    void armReminderTimer();
+    void rollDay(const QDate &today);
+    void postAlert(const Health::HrAlert &alert);
+    void postMove(const Health::MoveEvent &event);
+    void postExercise(const Health::ExerciseOffer &offer);
+    uint post(HealthNotification n);
+    void checkGoal();
+    void checkSleep();
+    QString clockText(qint64 ms) const;
+    bool worn(qint64 nowMs) const;
+
+    QSettings *m_settings;
+    NotificationPoster *m_poster;
+    std::function<qint64()> m_clock;
+    Settings m_config;
+    Health::HealthProfile m_profile;
+    qint64 m_profileAt = 0;
+    int m_restingEstimate = 0;
+    Health::MinuteSeries m_series;
+    Health::HrAlertDetector m_alerts;
+    Health::MoveReminder m_move;
+    Health::AutoExercise m_exercise;
+    bool m_workoutActive = false;
+    bool m_hrAttached = false;
+    qint64 m_lastHrMs = 0;
+    qint64 m_lastLiveMinute = -1;
+    QDate m_day;
+    qint64 m_sleepAttemptMs = 0;
+    uint m_alertId = 0; // the heart rate alert on screen: the next one replaces it (stock: one notification id)
+    QTimer *m_settle;
+    QTimer *m_reminderTimer;
+    MDConfItem *m_goalItem;
+    MDConfItem *m_twelveHourItem;
+};
+
+#endif // HEALTHMONITOR_H

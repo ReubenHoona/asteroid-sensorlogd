@@ -5,7 +5,11 @@ set(SRC
     weightDataLoader.cpp
     barometerDataLoader.cpp
     loggerSettings.cpp
+    healthMetricsLoader.cpp
+    sleepDataLoader.cpp
     ../common.cpp
+    ../daemon/sensorPlugins/heartrateDb.cpp
+    ${HEALTH_METRICS_SOURCES}
 )
 
 SET(HEADERS
@@ -15,7 +19,10 @@ SET(HEADERS
     weightDataLoader.h
     barometerDataLoader.h
     loggerSettings.h
+    healthMetricsLoader.h
+    sleepDataLoader.h
     ../common.h
+    ../daemon/sensorPlugins/heartrateDb.h
 )
 
 qt6_add_qml_module(sensorlogdqmlplugin
@@ -34,7 +41,10 @@ target_link_libraries(
 	    Qt::Qml
         Qt::DBus
         Qt::Sensors
+        ${mlite6_LIBRARIES}
+        ${sqlite3_LIBRARIES}
 )
+target_include_directories(sensorlogdqmlplugin PRIVATE ${mlite6_INCLUDE_DIRS} ${sqlite3_INCLUDE_DIRS})
 
 install(
     TARGETS sensorlogdqmlplugin

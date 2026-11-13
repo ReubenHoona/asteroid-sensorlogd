@@ -58,6 +58,13 @@ public:
 public slots:
     void triggerRecording();
 
+signals:
+    // a usable reading (a heart rate of at least heartrateSensor/minStatus accuracy, not seen before), with the
+    // time it was taken; the Health monitor builds the minutes of activity from them
+    void heartReading(qint64 takenMs, int bpm);
+    // a batch of readings is over (nothing came for a moment)
+    void batchSettled();
+
 private slots:
     void readingReceived();
     void retryStart();
