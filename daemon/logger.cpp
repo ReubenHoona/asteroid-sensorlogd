@@ -105,7 +105,7 @@ void Logger::setup() {
     m_health = new HealthMonitor(settings, &m_poster, this);
     m_health->attach(m_stepCounter, m_heartrateSensor);
     connect(m_health, &HealthMonitor::goalReached, this, &Logger::goalReached);
-    connect(m_health, &HealthMonitor::exerciseOffered, this, &Logger::exerciseOffered);
+    connect(m_health, &HealthMonitor::exerciseOffered, this, &Logger::ExerciseOffered);
     m_health->start();
 
     qDebug() << "sensorlogd setup complete";

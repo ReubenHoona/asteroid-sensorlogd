@@ -42,6 +42,9 @@
 class Logger : public QObject
 {
     Q_OBJECT
+    // the D-Bus interface name the clients use; without it Qt names the interface after the
+    // application's domain and name (org.asteroidos.sensorlogd.Logger)
+    Q_CLASSINFO("D-Bus Interface", "org.asteroid.sensorlogd.logger")
 public:
     explicit Logger(QObject *parent = 0);
     virtual ~Logger();
@@ -59,7 +62,8 @@ signals:
     // the steps goal was reached for the first time today (metric "steps")
     void goalReached(const QString &metric, int value, int goal);
     // auto-detected exercise: action "start" (activity "walking" / "running") or "stop"
-    void exerciseOffered(const QString &action, const QString &activity, qlonglong sinceMs);
+    // D-Bus signal ExerciseOffered (s action, s activity, x sinceMs): asteroid-exercise's rcExerciseOffered
+    void ExerciseOffered(const QString &action, const QString &activity, qlonglong sinceMs);
 private slots:
     void displayOn(QString displayState);
     void sensorfwRegistered();
