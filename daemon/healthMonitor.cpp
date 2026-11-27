@@ -28,6 +28,8 @@ using namespace Health;
 
 static const char *const TWELVE_HOUR_KEY = "/org/asteroidos/settings/use-12h-format";
 static const char *const BEDTIME_KEY = "/org/asteroidos/modes/bedtime"; // the launcher's Bedtime mode (modes.h)
+static const int MORNING_FROM_HOUR = 4; // the launcher's morning (modescore.h MorningFromHour, MorningToHour)
+static const int MORNING_TO_HOUR = 12;
 static const int GOAL_CHECK_MS = 10 * 60 * 1000; // a goal of another type than steps: its day summary at most this often
 static const int PROFILE_CACHE_MS = 10 * 60 * 1000;
 static const int SLEEP_RETRY_MS = 30 * 60 * 1000;
@@ -641,9 +643,43 @@ void HealthMonitor::checkSleep()
     if (m_store && m_store->storeNight(night, QString::fromLatin1(SLEEP_ALGO_V2))) {
         m_settings->setValue("HealthPrivate/sleepStored", today);
         // the day's resting heart rate: once, over the 24 hours up to the night's end
-        if (night.valid)
+        if (night.valid) {
             storeRestingHr(local.date(), night.main.endMs);
+            postMorningBrief(night);
+        }
     }
+}
+
+// The Morning Brief's wake-up (R5 E-10). Stock starts it at the morning's wake-up (MorningBriefWakeUpReceiver; the
+// triggers BTM, ABTM, CHIME_NOTIFICATION: MorningBriefBtmBasedScheduler$Companion$MorningBriefTriggerEvent), not only
+// when Bedtime mode ends. The launcher posts "Start your day" when Bedtime ends in the morning (modes.cpp
+// postMorningBrief); this posts the same notification when the morning's night is stored (the wake-up as this watch
+// knows it: 30 minutes after the last asleep minute, at the next look; guess) and Bedtime was not on in the night or
+// now (then the launcher's comes at its end). Once a day, from 04:00 to 12:00 (the launcher's morning, modescore.h).
+// Texts: 0x7f140afa "Start your day", 0x7f140afb "Good morning! Here's how your day is shaping up."
+void HealthMonitor::postMorningBrief(const SleepNight &night)
+{
+    const qint64 t = now();
+    const QDateTime local = QDateTime::fromMSecsSinceEpoch(t);
+    if (local.time().hour() < MORNING_FROM_HOUR || local.time().hour() >= MORNING_TO_HOUR)
+        return;
+    if (m_settings->value("HealthPrivate/briefDay", -1).toLongLong() == local.date().toJulianDay())
+        return;
+    if (m_bedtimeItem->value(false).toBool())
+        return;
+    for (const QPointF &r : loadStateRecords(QStringLiteral("bedtime"), night.main.startMs - 3600 * 1000, t))
+        if (r.y() >= 0.5)
+            return;
+    m_settings->setValue("HealthPrivate/briefDay", local.date().toJulianDay());
+    HealthNotification n;
+    n.summary = QStringLiteral("Start your day");
+    n.body = QString::fromUtf8("Good morning! Here’s how your day is shaping up.");
+    n.icon = QStringLiteral("ios-sunny");
+    n.hints.insert("x-eos-app", QStringLiteral("asteroid-health"));
+    n.hints.insert("x-eos-open-page", QStringLiteral("morning"));
+    n.hints.insert("x-nemo-feedback", QStringLiteral("notif_normal"));
+    n.hints.insert("urgency", 1);
+    post(n);
 }
 
 // Bedtime mode as the sleep estimate's hint (R5 E-30): its changes in bedtime/ (1 on, 0 off), a record only when the

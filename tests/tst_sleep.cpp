@@ -497,6 +497,69 @@ private slots:
         Q_UNUSED(mon)
     }
 
+    // R5 E-10: the Morning Brief at the night's end (stored), when Bedtime did not bring it; once a day
+    void theMorningBriefComesWithTheNightWithoutBedtime()
+    {
+        Logs l;
+        typicalNight(l);
+        l.write();
+        QList<HealthNotification> posted;
+        struct Poster : NotificationPoster {
+            QList<HealthNotification> *out;
+            uint post(const HealthNotification &n) override { out->append(n); return 1; }
+        } capture;
+        capture.out = &posted;
+        monitor.reset();
+        clock = ms(THU, 7, 40);
+        monitor.reset(new HealthMonitor(settings, &capture));
+        monitor->setClock([this] { return clock; });
+        monitor->start();
+        monitor->evaluate();
+        SleepNight stored;
+        QVERIFY(HealthDb::readNight(healthDbPath(), THU, &stored));
+        QList<HealthNotification> briefs;
+        for (const HealthNotification &n : posted)
+            if (n.hints.value("x-eos-open-page").toString() == "morning")
+                briefs << n;
+        QCOMPARE(briefs.size(), 1);
+        QCOMPARE(briefs[0].summary, QString("Start your day"));
+        QCOMPARE(briefs[0].body, QString::fromUtf8("Good morning! Here’s how your day is shaping up."));
+        QCOMPARE(briefs[0].hints.value("x-eos-app").toString(), QString("asteroid-health"));
+        // once a day
+        posted.clear();
+        clock = ms(THU, 9, 0);
+        monitor->evaluate();
+        for (const HealthNotification &n : posted)
+            QVERIFY(n.hints.value("x-eos-open-page").toString() != "morning");
+        monitor.reset();
+    }
+
+    void noMorningBriefFromHereAfterABedtimeNight()
+    {
+        Logs l;
+        typicalNight(l);
+        l.rec("bedtime", ms(WED, 22, 20), 1);
+        l.rec("bedtime", ms(THU, 7, 0), 0); // the launcher posted it then
+        l.write();
+        QList<HealthNotification> posted;
+        struct Poster : NotificationPoster {
+            QList<HealthNotification> *out;
+            uint post(const HealthNotification &n) override { out->append(n); return 1; }
+        } capture;
+        capture.out = &posted;
+        monitor.reset();
+        clock = ms(THU, 7, 40);
+        monitor.reset(new HealthMonitor(settings, &capture));
+        monitor->setClock([this] { return clock; });
+        monitor->start();
+        monitor->evaluate();
+        QVERIFY(HealthDb::readNight(healthDbPath(), THU, nullptr));
+        for (const HealthNotification &n : posted)
+            QVERIFY(n.hints.value("x-eos-open-page").toString() != "morning");
+        // and not in the afternoon either: a night stored late says nothing of the morning
+        monitor.reset();
+    }
+
     // R5 E-30: a day of naps and no night keeps its naps
     void aDayOfNapsWithoutANightKeepsThem()
     {

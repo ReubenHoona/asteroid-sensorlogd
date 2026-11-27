@@ -193,6 +193,8 @@ private:
     void postMove(const Health::MoveEvent &event);
     void postExercise(const Health::ExerciseOffer &offer);
     void postGoal(const Health::MainGoal &goal, double value);
+    // the Morning Brief at the night's end when Bedtime did not bring it (R5 E-10)
+    void postMorningBrief(const Health::SleepNight &night);
     // a celebration: posted now, or held while a workout is on (stock's queue)
     void postCelebration(const HealthNotification &n);
     void releaseCelebrations();
