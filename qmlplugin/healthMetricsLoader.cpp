@@ -33,10 +33,10 @@ struct Context {
     HealthProfile profile;
     int resting;
     qint64 nowMs;
-    Context()
+    explicit Context(const HealthProfile &p)
     {
         nowMs = QDateTime::currentMSecsSinceEpoch();
-        profile = HealthProfile::load();
+        profile = p;
         resting = effectiveRestingHr(profile, profile.restingHr > 0 ? 0 : estimatedRestingHr(nowMs));
     }
 };
@@ -52,6 +52,34 @@ HealthMetricsLoader::HealthMetricsLoader() : QObject()
     connectHealthChanged(this, SLOT(onHealthChanged(qlonglong)));
 }
 
+const HealthProfile &HealthMetricsLoader::profile()
+{
+    if (m_profileKeys.isEmpty()) {
+        for (const QString &key : HealthProfile::keys()) {
+            MDConfItem *item = new MDConfItem(key, this);
+            connect(item, &MDConfItem::valueChanged, this, &HealthMetricsLoader::onProfileKeyChanged);
+            m_profileKeys << item;
+        }
+    }
+    const QDate today = QDate::currentDate();
+    if (m_profileDay != today) {
+        QVariantList values;
+        for (MDConfItem *item : m_profileKeys)
+            values << item->value();
+        m_profile = HealthProfile::fromKeyValues(values, today);
+        m_profileDay = today;
+    }
+    return m_profile;
+}
+
+void HealthMetricsLoader::onProfileKeyChanged()
+{
+    // (the energy formula keeps the copy it took for its minute, as before)
+    m_profileDay = QDate();
+    emit profileChanged();
+    emit dataChanged();
+}
+
 int HealthMetricsLoader::stepGoal() const
 {
     return qMax(1, MDConfItem("/org/asteroidos/ux/steps-goal").value(DEFAULT_STEPS_GOAL).toInt());
@@ -62,7 +90,7 @@ int HealthMetricsLoader::hourlyStepGoal() const { return HOURLY_STEPS; }
 
 QVariantMap HealthMetricsLoader::summary(QDate date)
 {
-    const Context c;
+    const Context c(profile());
     const DaySummary d = summarizeDay(date, c.profile, c.resting, c.nowMs);
     const ZoneMinutes &z = d.zones;
     const HourlyActivity &h = d.hourly;
@@ -97,9 +125,24 @@ int HealthMetricsLoader::azm(QDate date) { return summary(date).value("azm").toI
 int HealthMetricsLoader::azmWeek(QDate date)
 {
     int total = 0;
-    for (QDate d = date.addDays(1 - date.dayOfWeek()); d <= date; d = d.addDays(1))
-        total += azm(d);
+    for (const QVariant &d : zoneDays(date.addDays(1 - date.dayOfWeek()), date))
+        total += d.toMap().value("azm").toInt();
     return total;
+}
+
+QVariantList HealthMetricsLoader::zoneDays(QDate from, QDate to)
+{
+    QVariantList out;
+    if (!from.isValid() || !to.isValid() || to < from || from.daysTo(to) > 30)
+        return out;
+    const Context c(profile());
+    const QList<ZoneMinutes> days = zoneMinutesOfDays(from, to, c.profile, c.resting, c.nowMs);
+    for (int i = 0; i < days.size(); i++) {
+        const ZoneMinutes &z = days[i];
+        out << QVariantMap{{"date", from.addDays(i)}, {"zoneLight", z.light}, {"zoneModerate", z.moderate},
+                           {"zoneVigorous", z.vigorous}, {"zonePeak", z.peak}, {"azm", z.azm}};
+    }
+    return out;
 }
 
 QVariantMap HealthMetricsLoader::hourly(QDate date)
@@ -116,7 +159,7 @@ QVariantList HealthMetricsLoader::zones()
 {
     static const char *const names[] = {"Light", "Moderate", "Vigorous", "Peak"};
     static const Zone order[] = {Zone::Light, Zone::Moderate, Zone::Vigorous, Zone::Peak};
-    const Context c;
+    const Context c(profile());
     const int max = c.profile.maxHr();
     QVariantList list;
     for (int i = 0; i < 4; i++) {
@@ -129,12 +172,12 @@ QVariantList HealthMetricsLoader::zones()
 
 int HealthMetricsLoader::zoneForBpm(int bpm)
 {
-    const Context c;
+    const Context c(profile());
     return (int)Health::zoneForBpm(bpm, c.profile.maxHr(), c.resting);
 }
 
-int HealthMetricsLoader::restingHr() { return Context().resting; }
-int HealthMetricsLoader::maxHr() { return HealthProfile::load().maxHr(); }
+int HealthMetricsLoader::restingHr() { return Context(profile()).resting; }
+int HealthMetricsLoader::maxHr() { return profile().maxHr(); }
 
 int HealthMetricsLoader::restingHrOf(QDate date)
 {
@@ -195,7 +238,7 @@ void HealthMetricsLoader::takeEnergyContext()
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (m_energyAt > 0 && now >= m_energyAt && now - m_energyAt < KEEP_MS)
         return;
-    const Context c;
+    const Context c(profile());
     m_energyProfile = c.profile;
     m_energyResting = c.resting;
     m_energyAt = now;

@@ -11,6 +11,7 @@
 #define HEALTHPROFILE_H
 
 #include <QDate>
+#include <QStringList>
 #include <QVariant>
 
 namespace Health {
@@ -49,6 +50,11 @@ struct HealthProfile {
 
     // from the dconf keys above (today: the day the age is counted to)
     static HealthProfile load(const QDate &today = QDate::currentDate());
+    // the keys load() reads: gender, height, weight, birth date, age, resting heart rate, then the sleep goal (a
+    // reader that keeps the profile watches them)
+    static QStringList keys();
+    // from the values of keys(), in that order (invalid QVariant: unset); load() reads the keys and calls this
+    static HealthProfile fromKeyValues(const QVariantList &values, const QDate &today);
     // from the raw values of the keys (invalid QVariant: unset); load() reads the keys and calls this
     static HealthProfile fromValues(const QVariant &gender, const QVariant &heightCm, const QVariant &weightKg,
                                     const QVariant &birthDate, const QVariant &age, const QVariant &restingHr,

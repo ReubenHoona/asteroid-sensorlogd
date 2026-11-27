@@ -64,6 +64,13 @@ struct DaySummary {
     HourlyActivity hourly;
 };
 DaySummary summarizeDay(const QDate &day, const HealthProfile &profile, int restingHr, qint64 nowMs);
+// the time [fromMs, toMs) a day's numbers are for: the local day, up to nowMs if it is today
+void dayRange(const QDate &day, qint64 nowMs, qint64 *fromMs, qint64 *toMs);
+// The zone minutes and Active Zone Minutes of each day from `from` to `to` (both included, the oldest first), the
+// same as summarizeDay() has them, from one read of the heart rate database (the Health app's week of Active Zone
+// Minutes; a day's summary also reads its steps and barometer files)
+QList<ZoneMinutes> zoneMinutesOfDays(const QDate &from, const QDate &to, const HealthProfile &profile, int restingHr,
+                                     qint64 nowMs);
 // the day has a step day file or a heart rate reading
 bool hasDataOn(const QDate &day);
 

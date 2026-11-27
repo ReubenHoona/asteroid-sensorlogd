@@ -16,16 +16,21 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include <MDConfItem>
+
 #include "../metrics/healthProfile.h"
 
 /*
  * The shared metrics module of the Health app and the launcher's tiles and complications (health-fitness-11):
  * distance, energy burned, floors, heart rate zones, Active Zone Minutes and hourly activity for a day, from
- * what sensorlogd has logged and the Health profile (metrics/healthMetrics.h). Computed when asked; nothing
- * is kept and no sensor is woken.
+ * what sensorlogd has logged and the Health profile (metrics/healthMetrics.h). Computed when asked; no sensor is
+ * woken. The profile is read from dconf at the first call that needs it and kept, its keys watched: a change of
+ * one (Settings, the phone) is seen at the next call and told by profileChanged and dataChanged.
  *
  *   summary(date): { steps, distanceM, energyKcal, floors, zoneLight, zoneModerate, zoneVigorous, zonePeak,
  *                    azm, hoursMet, hoursTotal, hourSteps[24], restingHr, maxHr, strideM }
+ *   zoneDays(from, to): each day's { date, zoneLight, zoneModerate, zoneVigorous, zonePeak, azm }, the oldest
+ *                    first, as summary() has them, from one read (a week of Active Zone Minutes)
  *   daily(date):   the day's row in health.db, as the daemon closed it after midnight (store/healthDb.h):
  *                  { date, restingHr, closed, steps, kcal, distanceM, floors, azm, hoursMet, closedMs, seq }; {}
  *                  if the day has none
@@ -54,9 +59,13 @@ public:
     Q_INVOKABLE double distanceM(QDate date);
     Q_INVOKABLE int energyKcal(QDate date);
     Q_INVOKABLE int floors(QDate date);
-    // Active Zone Minutes of a day, and of the week (Monday to the date)
+    // Active Zone Minutes of a day, and of the week (Monday to the date: zoneDays())
     Q_INVOKABLE int azm(QDate date);
     Q_INVOKABLE int azmWeek(QDate date);
+    // the zone minutes and Active Zone Minutes of each day from `from` to `to` (both included, 31 days at most;
+    // today up to now): [{ date, zoneLight, zoneModerate, zoneVigorous, zonePeak, azm }], the oldest first, the
+    // numbers of summary(), from one read of the heart rate database and one of the resting rate
+    Q_INVOKABLE QVariantList zoneDays(QDate from, QDate to);
     // { hoursMet, hoursTotal, hourSteps[24], stepsPerHour }
     Q_INVOKABLE QVariantMap hourly(QDate date);
 
@@ -91,6 +100,9 @@ public:
 
 signals:
     void dataChanged();
+    // a key of the Health profile (metrics/healthProfile.h: gender, height, weight, birth date, age, resting heart
+    // rate, the sleep goal) changed: every day's numbers may be others (dataChanged follows)
+    void profileChanged();
 
 private slots:
     void onHealthChanged(qlonglong)
@@ -98,13 +110,20 @@ private slots:
         m_energyAt = 0;
         emit dataChanged();
     }
+    void onProfileKeyChanged();
 
 private:
+    // the Health profile, kept: read from the watched keys at the first call and again after one of them changed
+    // or on a new day (the age is counted to today)
+    const Health::HealthProfile &profile();
     // minuteKcal(), restingKcal(): the profile and the resting heart rate in force, taken again after a minute or
     // a write of the daemon (a workout asks every second, a batch of readings many times at once)
     void takeEnergyContext();
 
     QFileSystemWatcher *m_fileWatcher;
+    QList<MDConfItem *> m_profileKeys; // HealthProfile::keys(), made at the first profile()
+    Health::HealthProfile m_profile;
+    QDate m_profileDay; // the day m_profile was read for; invalid: to be read
     Health::HealthProfile m_energyProfile;
     int m_energyResting = 60;
     qint64 m_energyAt = 0;

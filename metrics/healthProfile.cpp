@@ -61,13 +61,28 @@ int HealthProfile::sleepGoalFrom(const QVariant &minutes)
     return ok && m >= 60 && m <= 1440 ? m : 480;
 }
 
+QStringList HealthProfile::keys()
+{
+    QStringList k;
+    for (const char *key : {"gender", "height-cm", "weight-kg", "birth-date", "age", "resting-hr"})
+        k << QString(PROFILE) + key;
+    k << QStringLiteral("/org/asteroidos/ux/sleep-goal");
+    return k;
+}
+
+HealthProfile HealthProfile::fromKeyValues(const QVariantList &v, const QDate &today)
+{
+    HealthProfile p = fromValues(v.value(0), v.value(1), v.value(2), v.value(3), v.value(4), v.value(5), today);
+    p.sleepGoalMin = sleepGoalFrom(v.value(6));
+    return p;
+}
+
 HealthProfile HealthProfile::load(const QDate &today)
 {
-    auto get = [](const char *key) { return MDConfItem(QString(PROFILE) + key).value(); };
-    HealthProfile p = fromValues(get("gender"), get("height-cm"), get("weight-kg"), get("birth-date"), get("age"),
-                                 get("resting-hr"), today);
-    p.sleepGoalMin = sleepGoalFrom(MDConfItem(QStringLiteral("/org/asteroidos/ux/sleep-goal")).value());
-    return p;
+    QVariantList values;
+    for (const QString &key : keys())
+        values << MDConfItem(key).value();
+    return fromKeyValues(values, today);
 }
 
 } // namespace Health

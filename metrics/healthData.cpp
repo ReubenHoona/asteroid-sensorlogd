@@ -123,13 +123,19 @@ int estimatedRestingHr(qint64 nowMs, int days)
     return n ? (int)std::lround((double)sum / n) : 0;
 }
 
+void dayRange(const QDate &day, qint64 nowMs, qint64 *fromMs, qint64 *toMs)
+{
+    *fromMs = QDateTime(day, QTime(0, 0)).toMSecsSinceEpoch();
+    *toMs = day == QDateTime::fromMSecsSinceEpoch(nowMs).date() ? nowMs
+                                                                : QDateTime(day.addDays(1), QTime(0, 0)).toMSecsSinceEpoch();
+}
+
 DaySummary summarizeDay(const QDate &day, const HealthProfile &profile, int restingHr, qint64 nowMs)
 {
     DaySummary d;
     const MinuteSeries series = loadDay(day);
-    const qint64 from = QDateTime(day, QTime(0, 0)).toMSecsSinceEpoch();
-    const qint64 to = day == QDateTime::fromMSecsSinceEpoch(nowMs).date() ? nowMs
-                                                                         : QDateTime(day.addDays(1), QTime(0, 0)).toMSecsSinceEpoch();
+    qint64 from, to;
+    dayRange(day, nowMs, &from, &to);
     d.steps = series.stepsBetween(from, to);
     d.distanceM = distanceM(d.steps, profile);
     d.energyKcal = energyKcal(series, from, to, profile, restingHr);
@@ -137,6 +143,24 @@ DaySummary summarizeDay(const QDate &day, const HealthProfile &profile, int rest
     d.zones = zoneMinutes(series, MinuteSeries::minuteOf(from), MinuteSeries::minuteOf(to), profile, restingHr);
     d.hourly = hourlyActivity(series, day);
     return d;
+}
+
+QList<ZoneMinutes> zoneMinutesOfDays(const QDate &from, const QDate &to, const HealthProfile &profile, int restingHr,
+                                     qint64 nowMs)
+{
+    QList<ZoneMinutes> out;
+    if (!from.isValid() || !to.isValid() || to < from)
+        return out;
+    // the heart rate of every day of them at once (loadDay() reads a day's, and no off-wrist ranges either)
+    MinuteSeries series;
+    loadHeartRate(series, QDateTime(from, QTime(0, 0)).toMSecsSinceEpoch(),
+                  QDateTime(to.addDays(1), QTime(0, 0)).toMSecsSinceEpoch());
+    for (QDate day = from; day <= to; day = day.addDays(1)) {
+        qint64 dayFrom, dayTo;
+        dayRange(day, nowMs, &dayFrom, &dayTo);
+        out << zoneMinutes(series, MinuteSeries::minuteOf(dayFrom), MinuteSeries::minuteOf(dayTo), profile, restingHr);
+    }
+    return out;
 }
 
 bool hasDataOn(const QDate &day)

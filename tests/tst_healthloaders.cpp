@@ -171,6 +171,93 @@ private slots:
         }
     }
 
+    // The zone minutes of days from one read of the heart rate database (the Health app's week of Active Zone
+    // Minutes) are each day's summary's, today cut at now; at most 31 days
+    void theZoneMinutesOfDaysAreTheSummaries()
+    {
+        profileMale175();
+        const QDate today = QDate::currentDate();
+        makeDay(day());                             // 10 moderate and 5 vigorous minutes: 20
+        addHeart(day().addDays(-1), 18, 0, 20, 175); // 20 peak minutes: 40
+        addHeart(day().addDays(-5), 23, 50, 20, 150); // vigorous, across midnight into the day after
+        addHeart(today, 0, 0, 3, 125);               // today (cut at now as the summary is)
+        HealthMetricsLoader loader;
+        const QDate from = today.addDays(-6);
+        const QVariantList days = loader.zoneDays(from, today);
+        QCOMPARE(days.size(), 7);
+        int week = 0;
+        for (int i = 0; i < 7; i++) {
+            const QDate d = from.addDays(i);
+            const QVariantMap z = days[i].toMap();
+            const QVariantMap s = loader.summary(d);
+            QCOMPARE(z["date"].toDate(), d);
+            for (const char *k : {"zoneLight", "zoneModerate", "zoneVigorous", "zonePeak", "azm"})
+                QCOMPARE(z[k].toInt(), s[k].toInt());
+            if (d >= today.addDays(1 - today.dayOfWeek()))
+                week += z["azm"].toInt();
+        }
+        QCOMPARE(days[5].toMap()["azm"].toInt(), 20);
+        QCOMPARE(days[4].toMap()["zonePeak"].toInt(), 20);
+        QCOMPARE(days[4].toMap()["azm"].toInt(), 40);
+        QCOMPARE(days[0].toMap()["zoneVigorous"].toInt() + days[1].toMap()["zoneVigorous"].toInt(), 20);
+        QCOMPARE(loader.azmWeek(today), week);
+        QCOMPARE(loader.zoneDays(day(), day()).size(), 1);
+        QVERIFY(loader.zoneDays(today, day()).isEmpty());
+        QVERIFY(loader.zoneDays(QDate(), today).isEmpty());
+        QCOMPARE(loader.zoneDays(today.addDays(-30), today).size(), 31);
+        QVERIFY(loader.zoneDays(today.addDays(-31), today).isEmpty());
+    }
+
+    // The profile is read from dconf once and kept (a summary a day read its seven keys each time), and a change of
+    // any of its keys after the first call is seen at the next one and told (profileChanged, dataChanged)
+    void theProfileIsKeptAndAChangeAfterTheFirstCallIsSeen()
+    {
+        profileMale175();
+        makeDay(day());
+        HealthMetricsLoader loader;
+        QSignalSpy profileSpy(&loader, &HealthMetricsLoader::profileChanged);
+        QSignalSpy dataSpy(&loader, &HealthMetricsLoader::dataChanged);
+        const int before = MGConfItem::testCreated();
+        const QVariantMap first = loader.summary(day());
+        QCOMPARE(MGConfItem::testCreated() - before, HealthProfile::keys().size());
+        for (int i = 1; i < 7; i++)
+            loader.summary(day().addDays(-i));
+        loader.zoneDays(day().addDays(-6), day());
+        loader.zones();
+        loader.maxHr();
+        loader.restingHr();
+        QCOMPARE(MGConfItem::testCreated() - before, HealthProfile::keys().size()); // none read again
+        QCOMPARE(profileSpy.count(), 0);
+
+        const QString P = "/org/asteroidos/health/profile/";
+        MGConfItem::setTestValue(P + "height-cm", 190);
+        QCOMPARE(profileSpy.count(), 1);
+        QCOMPARE(dataSpy.count(), 1);
+        QVERIFY(qAbs(loader.summary(day())["strideM"].toDouble() - 190 * 0.415 / 100) < 1e-9);
+        MGConfItem::setTestValue(P + "weight-kg", 90);
+        QVERIFY(loader.summary(day())["energyKcal"].toDouble() > first["energyKcal"].toDouble() + 100);
+        MGConfItem::setTestValue(P + "birth-date", QDate::currentDate().addYears(-40).toString(Qt::ISODate));
+        QCOMPARE(loader.maxHr(), 180);
+        QCOMPARE(loader.summary(day())["maxHr"].toInt(), 180);
+        MGConfItem::setTestValue(P + "age", 50); // the birth date comes first
+        QCOMPARE(loader.maxHr(), 180);
+        MGConfItem::setTestValue(P + "gender", "female");
+        QVERIFY(qAbs(loader.summary(day())["strideM"].toDouble() - 190 * 0.413 / 100) < 1e-9);
+        MGConfItem::setTestValue(P + "resting-hr", 50);
+        QCOMPARE(loader.restingHr(), 50);
+        QCOMPARE(loader.zones()[0].toMap()["startBpm"].toInt(), 50);
+        MGConfItem::setTestValue("/org/asteroidos/ux/sleep-goal", 420);
+        QCOMPARE(profileSpy.count(), 7);
+        QCOMPARE(dataSpy.count(), 7);
+        MGConfItem::setTestValue(P + "height-cm", 190); // the same value: no change
+        QCOMPARE(profileSpy.count(), 7);
+        // the numbers are those of a loader that reads the profile now
+        HealthMetricsLoader fresh;
+        QCOMPARE(loader.summary(day()), fresh.summary(day()));
+        QCOMPARE(loader.zoneDays(day().addDays(-6), day()), fresh.zoneDays(day().addDays(-6), day()));
+        QCOMPARE(MGConfItem::testCreated() - before, 2 * HealthProfile::keys().size());
+    }
+
     void readingsBelowTheAccuracyAreNotCounted()
     {
         profileMale175();
