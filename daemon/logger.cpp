@@ -20,6 +20,8 @@
 #include <QDebug>
 #include <QStandardPaths>
 
+#include <climits>
+
 #include "logger.h"
 #include "../common.h"
 
@@ -35,6 +37,10 @@ Logger::Logger(QObject *parent)  :
     if(!QDBusConnection::sessionBus().registerObject("/org/asteroid/sensorlogd/logger", this, QDBusConnection::ExportAllContents)) qDebug() << "failed to register object";
 
     settings = new QSettings(this);
+
+    // the health database: open from the start (the workouts' methods work before the sensors are up)
+    m_store = new Health::HealthDb(healthDbPath());
+    m_store->setChangeHandler([this](qint64 seq) { emit HealthChanged(seq); });
 
     // mce's display state; connected by name, so it works whether or not mce is up yet
     if (!QDBusConnection::systemBus().connect("com.nokia.mce", "/com/nokia/mce/signal", "com.nokia.mce.signal",
@@ -58,6 +64,7 @@ Logger::~Logger()
 {
     // the plugins write what they collected; before settings goes
     deletePlugins();
+    delete m_store;
 }
 
 void Logger::sensorfwRegistered() {
@@ -103,6 +110,7 @@ void Logger::setup() {
     }
 
     m_health = new HealthMonitor(settings, &m_poster, this);
+    m_health->setStore(m_store);
     m_health->attach(m_stepCounter, m_heartrateSensor);
     connect(m_health, &HealthMonitor::goalReached, this, &Logger::goalReached);
     connect(m_health, &HealthMonitor::exerciseOffered, this, &Logger::ExerciseOffered);
@@ -159,6 +167,76 @@ void Logger::setWorkoutActive(bool active) {
 
 qlonglong Logger::nextReminderAt() {
     return m_health ? m_health->nextReminderMs() : -1;
+}
+
+qlonglong Logger::BeginWorkout(qlonglong startMs, const QString &type, const QString &source, bool gps) {
+    const qint64 id = m_store->beginWorkout(startMs, type, source, gps);
+    if (id > 0)
+        setWorkoutActive(true);
+    return id;
+}
+
+bool Logger::AddTrackPoints(qlonglong id, const QList<qlonglong> &points) {
+    if (points.size() % 6 != 0)
+        return false;
+    auto clamp = [](qlonglong v, qlonglong lo, qlonglong hi) { return v < lo ? lo : v > hi ? hi : v; };
+    QVector<Health::TrackPoint> fixes;
+    fixes.reserve(points.size() / 6);
+    for (int i = 0; i + 5 < points.size(); i += 6) {
+        Health::TrackPoint p;
+        p.tMs = points[i];
+        p.latE7 = (qint32)clamp(points[i + 1], -2000000000LL, 2000000000LL);
+        p.lonE7 = (qint32)clamp(points[i + 2], -2000000000LL, 2000000000LL);
+        p.altDm = (int)clamp(points[i + 3], INT_MIN, INT_MAX);
+        p.haccDm = (int)clamp(points[i + 4], 0, INT_MAX);
+        p.speedCms = (int)clamp(points[i + 5], 0, INT_MAX);
+        fixes.append(p);
+    }
+    return m_store->addTrackPoints(id, fixes);
+}
+
+bool Logger::AddLap(qlonglong id, int n, qlonglong startMs, qlonglong endMs, double distanceM, int avgBpm,
+                    const QString &kind) {
+    Health::LapRecord lap;
+    lap.n = n;
+    lap.startMs = startMs;
+    lap.endMs = endMs;
+    lap.distanceM = distanceM;
+    lap.avgBpm = avgBpm;
+    lap.kind = kind;
+    return m_store->addLap(id, lap);
+}
+
+bool Logger::SetPaused(qlonglong id, bool paused, qlonglong atMs, bool automatic) {
+    return m_store->setPaused(id, atMs, paused, automatic);
+}
+
+bool Logger::EndWorkout(qlonglong id, qlonglong endMs, const QVariantMap &summary) {
+    Health::WorkoutRecord s;
+    s.activeS = summary.value("activeS").toInt();
+    s.distanceM = summary.value("distanceM").toDouble();
+    s.kcal = summary.value("kcal").toDouble();
+    s.steps = summary.value("steps").toInt();
+    s.avgBpm = summary.value("avgBpm").toInt();
+    s.maxBpm = summary.value("maxBpm").toInt();
+    s.lightS = summary.value("lightS").toInt();
+    s.moderateS = summary.value("moderateS").toInt();
+    s.vigorousS = summary.value("vigorousS").toInt();
+    s.peakS = summary.value("peakS").toInt();
+    s.azm = summary.value("azm").toInt();
+    s.elevGainM = summary.value("elevGainM").toDouble();
+    const bool ok = m_store->endWorkout(id, endMs, s);
+    if (ok)
+        setWorkoutActive(false);
+    return ok;
+}
+
+bool Logger::DeleteWorkout(qlonglong id) {
+    return m_store->deleteWorkout(id);
+}
+
+qlonglong Logger::HealthSeq() {
+    return m_store->seq();
 }
 
 void Logger::triggerRecording() {

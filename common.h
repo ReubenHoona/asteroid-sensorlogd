@@ -12,6 +12,7 @@
 #define SENSORLOGD_COMMON_H
 
 #include <QDate>
+#include <QObject>
 #include <QString>
 #include <QList>
 #include <QPointF>
@@ -19,6 +20,11 @@
 QString fileNameForDate(QDate date, QString prefix);
 QString sensorDirPath(QString prefix);
 QString heartrateDbPath(); // every heart rate reading (daemon/sensorPlugins/heartrateDb.h), next to the day files
+QString loggerRootPath(); // the folder of the day files and the databases, with the closing slash
+QString healthDbPath(); // workouts, sleep, one row a day (store/healthDb.h), next to heartrate.db
+// connects the daemon's D-Bus signal HealthChanged(x seq), sent after every write to health.db, to the receiver's
+// slot (SLOT(name(qlonglong))); false if the session bus is not there
+bool connectHealthChanged(QObject *receiver, const char *slot);
 void fileAddRecord(QString sensorPrefix, QString logdata, QDateTime recordTime = QDateTime::currentDateTime()); //adds a record to today's log file for the given sensor
 QList<QPointF> readDayRecords(const QString &path); // time:value records of a day file; none (quietly) if nothing was logged that day
 void setupFilePath(QString sensorPrefix); //sets up the paths for sensors to write into

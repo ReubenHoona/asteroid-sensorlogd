@@ -28,6 +28,7 @@ static const int DEFAULT_STEPS_GOAL = 10000;
 static const int PROFILE_CACHE_MS = 10 * 60 * 1000;
 static const int SLEEP_RETRY_MS = 30 * 60 * 1000;
 static const int SLEEP_QUIET_MS = 30 * 60 * 1000; // awake this long: the night is over
+static const int CLOSE_DAYS_BACK = 31;            // the most days closed at once after a long time off
 
 static QString json(const QJsonObject &o)
 {
@@ -100,6 +101,39 @@ void HealthMonitor::start()
     m_move.setState(state);
     loadProfile(true);
     armReminderTimer();
+
+    // health.db: the daemon's (one writer), or one of our own
+    if (!m_store) {
+        m_ownStore.reset(new HealthDb(healthDbPath()));
+        m_store = m_ownStore.data();
+    }
+    m_closedThrough = QDate();
+    m_import.reset(new HealthImport(m_store, loggerRootPath(),
+                                    [this](const QDate &day, DailyTotals *totals) { return dayTotals(day, totals); },
+                                    m_day));
+    if (!m_import->done()) {
+        QMetaObject::invokeMethod(this, "importStep", Qt::QueuedConnection);
+    } else {
+        // workouts the Exercise app logged while the daemon was not running
+        m_import->importExerciseDays(m_day.addDays(-2), m_day);
+        closeDays();
+    }
+}
+
+void HealthMonitor::importStep()
+{
+    if (!m_import || m_import->done())
+        return;
+    if (m_import->step()) {
+        QMetaObject::invokeMethod(this, "importStep", Qt::QueuedConnection);
+        return;
+    }
+    if (!m_import->done())
+        return; // could not be marked: the next start goes on
+    m_restingEstimate = estimatedRestingHr(now());
+    const QDate today = QDateTime::fromMSecsSinceEpoch(now()).date();
+    m_import->importExerciseDays(today.addDays(-2), today);
+    closeDays();
 }
 
 void HealthMonitor::attach(StepCounterPlugin *steps, HeartrateSensorPlugin *heart)
@@ -118,6 +152,11 @@ void HealthMonitor::attach(StepCounterPlugin *steps, HeartrateSensorPlugin *hear
 void HealthMonitor::setWorkoutActive(bool active)
 {
     m_workoutActive = active;
+    // a workout ended: the Exercise app logged it before it said so (until it writes through sensorlogd, WO-02)
+    if (!active && m_import && m_import->done()) {
+        const QDate today = QDateTime::fromMSecsSinceEpoch(now()).date();
+        m_import->importExerciseDays(today.addDays(-1), today);
+    }
 }
 
 void HealthMonitor::batchSettled()
@@ -202,6 +241,9 @@ void HealthMonitor::evaluate()
 
     // 5. last night's sleep
     checkSleep();
+
+    // 6. the days that are over
+    closeDays();
 
     armReminderTimer();
 }
@@ -313,7 +355,7 @@ void HealthMonitor::checkGoal()
 }
 
 // Last night's sleep, once it is over: when data is looked at after the watch has been still for
-// SLEEP_QUIET_MS past the night's last asleep minute; stored in sleep/<wake date>.json. Tried at most every
+// SLEEP_QUIET_MS past the night's last asleep minute; stored in health.db (sleep_session). Tried at most every
 // SLEEP_RETRY_MS, on data deliveries only.
 void HealthMonitor::checkSleep()
 {
@@ -331,6 +373,44 @@ void HealthMonitor::checkSleep()
     const SleepNight night = estimateNight(local.date(), m_profile, rhr);
     if (!night.valid || t - night.main.endMs < SLEEP_QUIET_MS)
         return;
-    if (storeSleep(night))
+    if (m_store && m_store->storeNight(night, QString::fromLatin1(HealthImport::SLEEP_ALGO)))
         m_settings->setValue("HealthPrivate/sleepStored", today);
+}
+
+bool HealthMonitor::dayTotals(const QDate &day, DailyTotals *totals)
+{
+    if (!hasDataOn(day))
+        return false;
+    loadProfile();
+    const int rhr = effectiveRestingHr(m_profile, m_restingEstimate);
+    const DaySummary d = summarizeDay(day, m_profile, rhr, now());
+    totals->steps = d.steps;
+    totals->kcal = d.energyKcal;
+    totals->distanceM = d.distanceM;
+    totals->floors = d.floors;
+    totals->azm = d.zones.azm;
+    totals->hoursMet = d.hourly.hoursMet;
+    return true;
+}
+
+// The days that are over get their row in health.db: on the first delivery after midnight (stock's Health
+// Services flush the day before midnight; this watch has no wake for it, so it is the first time data is looked
+// at), and on the days missed while the daemon was not running. Not before the one-time import is through,
+// which closes the days before it.
+void HealthMonitor::closeDays()
+{
+    if (!m_store || !importDone())
+        return;
+    const QDate yesterday = QDateTime::fromMSecsSinceEpoch(now()).date().addDays(-1);
+    if (m_closedThrough.isValid() && m_closedThrough >= yesterday)
+        return;
+    QDate from = m_store->lastClosedDay();
+    from = from.isValid() ? from.addDays(1) : yesterday;
+    from = qMax(from, yesterday.addDays(1 - CLOSE_DAYS_BACK));
+    for (QDate d = from; d <= yesterday; d = d.addDays(1)) {
+        DailyTotals totals;
+        if (dayTotals(d, &totals))
+            m_store->setDailyTotals(d, totals, now());
+    }
+    m_closedThrough = yesterday;
 }

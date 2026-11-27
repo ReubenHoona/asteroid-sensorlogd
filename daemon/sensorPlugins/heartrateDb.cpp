@@ -166,3 +166,39 @@ QVector<HeartrateDb::MinuteMean> HeartrateDb::minuteMeans(const QString &path, q
     sqlite3_close(db);
     return out;
 }
+
+// one number of a query with two times bound (none: 0), read as minuteMeans()
+static qint64 readNumber(const QString &path, const char *sql, qint64 fromMs, qint64 toMs)
+{
+    if (!QFile::exists(path))
+        return 0;
+    sqlite3 *db = nullptr;
+    qint64 value = 0;
+    if (sqlite3_open_v2(QFile::encodeName(path).constData(), &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nullptr)
+            == SQLITE_OK) {
+        sqlite3_busy_timeout(db, BUSY_TIMEOUT_MS);
+        sqlite3_stmt *st = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr) == SQLITE_OK) {
+            if (sqlite3_bind_parameter_count(st) == 2) {
+                sqlite3_bind_int64(st, 1, fromMs);
+                sqlite3_bind_int64(st, 2, toMs);
+            }
+            if (sqlite3_step(st) == SQLITE_ROW)
+                value = sqlite3_column_int64(st, 0);
+        }
+        sqlite3_finalize(st);
+    }
+    sqlite3_close(db);
+    return value;
+}
+
+qint64 HeartrateDb::firstTime(const QString &path)
+{
+    // the time is the table's key: the first row of its b-tree
+    return readNumber(path, "SELECT MIN(time) FROM heartrate", 0, 0);
+}
+
+bool HeartrateDb::anyReading(const QString &path, qint64 fromMs, qint64 toMs)
+{
+    return readNumber(path, "SELECT EXISTS (SELECT 1 FROM heartrate WHERE time >= ? AND time < ?)", fromMs, toMs) != 0;
+}

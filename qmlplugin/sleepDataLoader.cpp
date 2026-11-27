@@ -8,7 +8,6 @@
  */
 
 #include <QDateTime>
-#include <QFile>
 
 #include "sleepDataLoader.h"
 #include "../common.h"
@@ -18,20 +17,19 @@ using namespace Health;
 
 SleepDataLoader::SleepDataLoader() : QObject()
 {
-    setupFilePath("sleep");
-    m_fileWatcher = new QFileSystemWatcher(this);
-    m_fileWatcher->addPath(sensorDirPath("sleep"));
-    connect(m_fileWatcher, &QFileSystemWatcher::directoryChanged, this, &SleepDataLoader::dataChanged);
+    connectHealthChanged(this, SLOT(onHealthChanged(qlonglong)));
 }
 
 QVariantMap SleepDataLoader::forDate(QDate wakeDate)
 {
-    const HealthProfile profile = HealthProfile::load();
-    // the resting heart rate matters only to an estimate made now
-    const bool file = QFile::exists(sleepFilePath(wakeDate));
-    const int estimate = file || profile.restingHr > 0 ? 0 : estimatedRestingHr(QDateTime::currentMSecsSinceEpoch());
-    bool stored = false;
-    const SleepNight night = loadSleep(wakeDate, profile, effectiveRestingHr(profile, estimate), &stored);
+    SleepNight night;
+    const bool stored = loadStoredSleep(wakeDate, &night);
+    if (!stored) {
+        // the resting heart rate matters only to an estimate made now
+        const HealthProfile profile = HealthProfile::load();
+        const int estimate = profile.restingHr > 0 ? 0 : estimatedRestingHr(QDateTime::currentMSecsSinceEpoch());
+        night = estimateNight(wakeDate, profile, effectiveRestingHr(profile, estimate));
+    }
     QVariantMap m = night.toMap();
     m["stored"] = stored;
     m["wakeDate"] = wakeDate;

@@ -18,14 +18,13 @@
 #include "../common.h"
 #include "../metrics/healthData.h"
 #include "../metrics/healthMetrics.h"
+#include "../store/healthDb.h"
 
 using namespace Health;
 
 namespace {
 
 const int DEFAULT_STEPS_GOAL = 10000;
-
-qint64 dayStart(const QDate &d) { return QDateTime(d, QTime(0, 0)).toMSecsSinceEpoch(); }
 
 // the profile and the resting heart rate in force, and the time they were taken at
 struct Context {
@@ -48,6 +47,7 @@ HealthMetricsLoader::HealthMetricsLoader() : QObject()
     m_fileWatcher->addPath(sensorDirPath("stepCounter"));
     connect(m_fileWatcher, &QFileSystemWatcher::directoryChanged, this, &HealthMetricsLoader::dataChanged);
     connect(m_fileWatcher, &QFileSystemWatcher::fileChanged, this, &HealthMetricsLoader::dataChanged);
+    connectHealthChanged(this, SLOT(onHealthChanged(qlonglong)));
 }
 
 int HealthMetricsLoader::stepGoal() const
@@ -61,22 +61,18 @@ int HealthMetricsLoader::hourlyStepGoal() const { return HOURLY_STEPS; }
 QVariantMap HealthMetricsLoader::summary(QDate date)
 {
     const Context c;
-    const MinuteSeries series = loadDay(date);
-    const qint64 from = dayStart(date);
-    const qint64 to = date == QDateTime::fromMSecsSinceEpoch(c.nowMs).date() ? c.nowMs : dayStart(date.addDays(1));
-    const int steps = series.stepsBetween(from, to);
-    const ZoneMinutes z = zoneMinutes(series, MinuteSeries::minuteOf(from), MinuteSeries::minuteOf(to), c.profile,
-                                      c.resting);
-    const HourlyActivity h = hourlyActivity(series, date);
+    const DaySummary d = summarizeDay(date, c.profile, c.resting, c.nowMs);
+    const ZoneMinutes &z = d.zones;
+    const HourlyActivity &h = d.hourly;
     QVariantList hourSteps;
     for (int s : h.hourSteps)
         hourSteps << s;
 
     QVariantMap m;
-    m["steps"] = steps;
-    m["distanceM"] = Health::distanceM(steps, c.profile);
-    m["energyKcal"] = Health::energyKcal(series, from, to, c.profile, c.resting);
-    m["floors"] = floorsClimbed(loadPressure(date), series);
+    m["steps"] = d.steps;
+    m["distanceM"] = d.distanceM;
+    m["energyKcal"] = d.energyKcal;
+    m["floors"] = d.floors;
     m["zoneLight"] = z.light;
     m["zoneModerate"] = z.moderate;
     m["zoneVigorous"] = z.vigorous;
@@ -148,4 +144,25 @@ int HealthMetricsLoader::defaultLowBpm()
 {
     const Context c;
     return Health::defaultLowBpm(c.profile, c.resting);
+}
+
+QVariantMap HealthMetricsLoader::daily(QDate date)
+{
+    DailyRecord r;
+    return HealthDb::readDaily(healthDbPath(), date, &r) ? r.toMap() : QVariantMap();
+}
+
+double HealthMetricsLoader::minuteKcal(int steps, double bpm)
+{
+    const Context c;
+    Minute m;
+    m.steps = qMax(0, steps);
+    m.hr = bpm > 0 ? bpm : 0;
+    m.hrCount = bpm > 0 ? 1 : 0;
+    return activeKcalForMinute(m, c.profile, c.resting);
+}
+
+double HealthMetricsLoader::restingKcal(double durationMs)
+{
+    return durationMs > 0 ? bmrKcalPerDay(HealthProfile::load()) * durationMs / 86400000.0 : 0;
 }

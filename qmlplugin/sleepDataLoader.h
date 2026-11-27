@@ -11,19 +11,20 @@
 #define SLEEPDATALOADER_H
 
 #include <QDate>
-#include <QFileSystemWatcher>
 #include <QObject>
 #include <QVariantMap>
 
 /*
  * The Sleep card and detail's data (health-fitness-17): the night the daemon estimated and stored in the
- * morning (sleep/<wake date>.json), or one estimated now from the logs if the daemon has not yet.
+ * morning (health.db, sleep_session; a night of a sensorlogd from before it: sleep/<wake date>.json until the
+ * one-time import took it in), or one estimated now from the logs if the daemon has not yet.
  *
  *   { valid, stored, wakeDate, main: { startMs, endMs, durationMin, asleepMin, awakeMin, remMin, lightMin,
  *     deepMin, awakePct, remPct, lightPct, deepPct, avgHr }, naps: [ same ], napMin, score, scoreLabel,
  *     goalMin, goalMet }
  *
  * valid false: "No recent data. Wear your watch to sleep."
+ * dataChanged: the daemon wrote to health.db (its D-Bus signal HealthChanged).
  */
 class SleepDataLoader : public QObject
 {
@@ -38,8 +39,8 @@ public:
 signals:
     void dataChanged();
 
-private:
-    QFileSystemWatcher *m_fileWatcher;
+private slots:
+    void onHealthChanged(qlonglong) { emit dataChanged(); }
 };
 
 #endif // SLEEPDATALOADER_H

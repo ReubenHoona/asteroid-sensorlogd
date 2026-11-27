@@ -11,12 +11,12 @@
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
-#include <QSaveFile>
 #include <QSettings>
 #include <QTime>
 
 #include "../common.h"
 #include "../daemon/sensorPlugins/heartrateDb.h"
+#include "../store/healthDb.h"
 #include "healthData.h"
 
 namespace Health {
@@ -60,6 +60,30 @@ int estimatedRestingHr(qint64 nowMs, int days)
     return estimateRestingHr(means);
 }
 
+DaySummary summarizeDay(const QDate &day, const HealthProfile &profile, int restingHr, qint64 nowMs)
+{
+    DaySummary d;
+    const MinuteSeries series = loadDay(day);
+    const qint64 from = QDateTime(day, QTime(0, 0)).toMSecsSinceEpoch();
+    const qint64 to = day == QDateTime::fromMSecsSinceEpoch(nowMs).date() ? nowMs
+                                                                         : QDateTime(day.addDays(1), QTime(0, 0)).toMSecsSinceEpoch();
+    d.steps = series.stepsBetween(from, to);
+    d.distanceM = distanceM(d.steps, profile);
+    d.energyKcal = energyKcal(series, from, to, profile, restingHr);
+    d.floors = floorsClimbed(loadPressure(day), series);
+    d.zones = zoneMinutes(series, MinuteSeries::minuteOf(from), MinuteSeries::minuteOf(to), profile, restingHr);
+    d.hourly = hourlyActivity(series, day);
+    return d;
+}
+
+bool hasDataOn(const QDate &day)
+{
+    if (QFile::exists(fileNameForDate(day, "stepCounter")))
+        return true;
+    return HeartrateDb::anyReading(heartrateDbPath(), QDateTime(day, QTime(0, 0)).toMSecsSinceEpoch(),
+                                   QDateTime(day.addDays(1), QTime(0, 0)).toMSecsSinceEpoch());
+}
+
 QString sleepFilePath(const QDate &wakeDate)
 {
     return sensorDirPath("sleep") + wakeDate.toString("yyyy-MM-dd") + ".json";
@@ -75,32 +99,33 @@ SleepNight estimateNight(const QDate &wakeDate, const HealthProfile &profile, in
     return estimateSleep(series, wakeDate, profile, restingHr);
 }
 
-SleepNight loadSleep(const QDate &wakeDate, const HealthProfile &profile, int restingHr, bool *stored)
+bool loadStoredSleep(const QDate &wakeDate, SleepNight *night)
 {
+    const QString db = healthDbPath();
+    if (HealthDb::readNight(db, wakeDate, night))
+        return true;
+    // the file only until the import took the files in (then health.db alone says what is stored)
+    if (HealthDb::readMeta(db, QStringLiteral("import.sleep")).toLongLong() == 1)
+        return false;
     QFile file(sleepFilePath(wakeDate));
     if (file.open(QIODevice::ReadOnly)) {
         const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
         if (doc.isObject()) {
-            if (stored)
-                *stored = true;
-            return SleepNight::fromJson(doc.object());
+            if (night)
+                *night = SleepNight::fromJson(doc.object());
+            return true;
         }
     }
-    if (stored)
-        *stored = false;
-    return estimateNight(wakeDate, profile, restingHr);
+    return false;
 }
 
-bool storeSleep(const SleepNight &night)
+SleepNight loadSleep(const QDate &wakeDate, const HealthProfile &profile, int restingHr, bool *stored)
 {
-    if (!night.valid)
-        return false;
-    setupFilePath("sleep");
-    QSaveFile file(sleepFilePath(night.wakeDate));
-    if (!file.open(QIODevice::WriteOnly))
-        return false;
-    file.write(QJsonDocument(night.toJson()).toJson(QJsonDocument::Compact));
-    return file.commit();
+    SleepNight night;
+    const bool found = loadStoredSleep(wakeDate, &night);
+    if (stored)
+        *stored = found;
+    return found ? night : estimateNight(wakeDate, profile, restingHr);
 }
 
 } // namespace Health

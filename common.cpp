@@ -8,6 +8,7 @@
  * You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <QDBusConnection>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QFile>
@@ -29,6 +30,25 @@ QString sensorDirPath(QString prefix) {
 QString heartrateDbPath() {
     QSettings settings("asteroid", "sensorlogd");
     return settings.value("loggerRootPath", QStandardPaths::writableLocation(QStandardPaths::HomeLocation) + "/.asteroid-sensorlogd/").toString() + "heartrate.db";
+}
+
+QString loggerRootPath() {
+    QSettings settings("asteroid", "sensorlogd");
+    QString root = settings.value("loggerRootPath", QStandardPaths::writableLocation(QStandardPaths::HomeLocation) + "/.asteroid-sensorlogd/").toString();
+    if (!root.endsWith('/'))
+        root += '/';
+    return root;
+}
+
+QString healthDbPath() {
+    return loggerRootPath() + "health.db";
+}
+
+bool connectHealthChanged(QObject *receiver, const char *slot) {
+    return QDBusConnection::sessionBus().connect(QStringLiteral("org.asteroid.sensorlogd.logger"),
+                                                 QStringLiteral("/org/asteroid/sensorlogd/logger"),
+                                                 QStringLiteral("org.asteroid.sensorlogd.logger"),
+                                                 QStringLiteral("HealthChanged"), receiver, slot);
 }
 
 void fileAddRecord(QString sensorPrefix, QString logdata, QDateTime recordTime) { //adds a record to today's log file for the given sensor

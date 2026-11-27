@@ -16,6 +16,7 @@
 #include "barometerDataLoader.h"
 #include "healthMetricsLoader.h"
 #include "sleepDataLoader.h"
+#include "workoutLoader.h"
 #include <QtQml>
 
 LogdPlugin::LogdPlugin(QObject* parent)
@@ -33,4 +34,5 @@ void LogdPlugin::registerTypes(const char* uri)
     qmlRegisterType<LoggerSettings>(uri, 1, 0, "LoggerSettings");
     qmlRegisterType<HealthMetricsLoader>(uri, 1, 0, "HealthMetricsLoader");
     qmlRegisterType<SleepDataLoader>(uri, 1, 0, "SleepDataLoader");
+    qmlRegisterType<WorkoutLoader>(uri, 1, 0, "WorkoutLoader");
 }

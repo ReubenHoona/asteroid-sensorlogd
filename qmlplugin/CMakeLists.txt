@@ -7,6 +7,7 @@ set(SRC
     loggerSettings.cpp
     healthMetricsLoader.cpp
     sleepDataLoader.cpp
+    workoutLoader.cpp
     ../common.cpp
     ../daemon/sensorPlugins/heartrateDb.cpp
     ${HEALTH_METRICS_SOURCES}
@@ -21,6 +22,7 @@ SET(HEADERS
     loggerSettings.h
     healthMetricsLoader.h
     sleepDataLoader.h
+    workoutLoader.h
     ../common.h
     ../daemon/sensorPlugins/heartrateDb.h
 )

@@ -2,8 +2,12 @@
 // hourly activity of a day from the step day files, the heart rate database and the barometer, with the Health
 // profile; the one steps goal), SleepDataLoader (the stored night, or one estimated from the logs) and the
 // LoggerSettings of the Health features (the single steps goal in dconf, reminders, alerts, auto exercise, each
-// change told to the daemon over D-Bus). The days are the day before today (a whole day; today is cut at now).
+// change told to the daemon over D-Bus), WorkoutLoader, the day rows of health.db, the energy formula for the
+// Exercise app, and the loaders reading again when the daemon says health.db changed. The days are the day before
+// today (a whole day; today is cut at now).
 #include <QDBusConnection>
+#include <QDBusMessage>
+#include <QJsonDocument>
 #include <QSignalSpy>
 #include <QTest>
 
@@ -12,6 +16,9 @@
 #include "../qmlplugin/healthMetricsLoader.h"
 #include "../qmlplugin/loggerSettings.h"
 #include "../qmlplugin/sleepDataLoader.h"
+#include "../qmlplugin/workoutLoader.h"
+#include "../store/healthDb.h"
+#include "../store/healthImport.h"
 #include "peek.h"
 #include "testenv.h"
 
@@ -234,18 +241,172 @@ private slots:
         QVERIFY(!n["goalMet"].toBool());
         QVERIFY(!n["scoreLabel"].toString().isEmpty());
 
-        // the daemon stores it: the same night, read from the file
+        // the daemon stores it in health.db: the same night, read from there
         SleepNight night = estimateNight(wake, HealthProfile(), 60);
-        QVERIFY(storeSleep(night));
-        QVERIFY(QFile::exists(sleepFilePath(wake)));
+        {
+            HealthDb db(healthDbPath());
+            QVERIFY(db.storeNight(night, HealthImport::SLEEP_ALGO));
+            // an invalid night is not stored
+            QVERIFY(!db.storeNight(SleepNight(), HealthImport::SLEEP_ALGO));
+        }
+        QVERIFY(!QFile::exists(sleepFilePath(wake))); // no file any more
         n = loader.forDate(wake);
         QVERIFY(n["stored"].toBool());
         QCOMPARE(n["main"].toMap()["asleepMin"].toInt(), 420);
         QCOMPARE(n["score"].toInt(), night.score);
+        QVariantMap expected = night.toMap();
+        expected["stored"] = true;
+        expected["wakeDate"] = wake;
+        QCOMPARE(n, expected);
+    }
 
-        // an invalid night is not stored
-        SleepNight none;
-        QVERIFY(!storeSleep(none));
+    void aNightOfTheOldFilesIsReadUntilItIsImported()
+    {
+        // a sensorlogd from before health.db stored the night in sleep/<date>.json
+        const QDate wake = QDate::currentDate().addDays(-2);
+        SleepNight old;
+        old.valid = true;
+        old.wakeDate = wake;
+        old.main.startMs = ms(wake.addDays(-1), 23, 30);
+        old.main.endMs = ms(wake, 6, 30);
+        old.main.asleepMin = 400;
+        old.main.awakeMin = 20;
+        old.main.deepMin = 80;
+        old.main.remMin = 80;
+        old.main.lightMin = 240;
+        old.main.avgHr = 54.5;
+        old.score = 82;
+        old.scoreLabel = sleepScoreLabel(82);
+        QFile f(sleepFilePath(wake));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(QJsonDocument(old.toJson()).toJson(QJsonDocument::Compact));
+        f.close();
+        SleepDataLoader loader;
+        const QVariantMap fromFile = loader.forDate(wake);
+        QVERIFY(fromFile["stored"].toBool());
+        QCOMPARE(fromFile["main"].toMap()["asleepMin"].toInt(), 400);
+        // imported: the same answer, from health.db
+        HealthDb db(healthDbPath());
+        QCOMPARE(HealthImport::importSleepFile(&db, loggerRootPath(), wake.toString("yyyy-MM-dd") + ".json"), 1);
+        QVERIFY(QFile::remove(sleepFilePath(wake))); // (only to see where it is read from)
+        QCOMPARE(loader.forDate(wake), fromFile);
+        // once the import is through, the files are not read: health.db alone says what is stored
+        const QDate other = wake.addDays(-1);
+        old.wakeDate = other;
+        QFile g(sleepFilePath(other));
+        QVERIFY(g.open(QIODevice::WriteOnly));
+        g.write(QJsonDocument(old.toJson()).toJson(QJsonDocument::Compact));
+        g.close();
+        QVERIFY(loader.forDate(other)["stored"].toBool());
+        QVERIFY(db.setMeta("import.sleep", 1));
+        QVERIFY(!loader.forDate(other)["stored"].toBool());
+    }
+
+    // ---- workouts and days of health.db ----
+    void theWorkoutLoaderReadsHealthDb()
+    {
+        WorkoutLoader loader;
+        QVERIFY(loader.recent(3).isEmpty()); // no database yet
+        QVERIFY(loader.last().isEmpty());
+        QVERIFY(!QFile::exists(healthDbPath())); // and a reader does not make one
+        const QDate d = day();
+        HealthDb db(healthDbPath());
+        WorkoutRecord w;
+        w.startMs = ms(d, 7, 0);
+        w.endMs = ms(d, 7, 40);
+        w.activeS = 2300;
+        w.type = "walk";
+        w.distanceM = 3100;
+        w.kcal = 190;
+        w.importedFrom = "exercise/x.log";
+        QVERIFY(db.importWorkout(w));
+        const qint64 on = db.beginWorkout(ms(d, 18, 0), "bike", "auto", false);
+        QVERIFY(on > 0);
+        const QVariantList list = loader.workouts(d, d);
+        QCOMPARE(list.size(), 2);
+        QCOMPARE(list[0].toMap()["id"].toLongLong(), on); // newest first
+        QVERIFY(!list[0].toMap()["ended"].toBool());
+        QCOMPARE(list[0].toMap()["source"].toString(), QString("auto"));
+        const QVariantMap walk = list[1].toMap();
+        QCOMPARE(walk["type"].toString(), QString("walk"));
+        QCOMPARE(walk["activeS"].toInt(), 2300);
+        QCOMPARE(walk["distanceM"].toDouble(), 3100.0);
+        QVERIFY(walk["imported"].toBool());
+        QCOMPARE(loader.last()["type"].toString(), QString("walk")); // the newest finished one
+        QCOMPARE(loader.workouts(d.addDays(1), d.addDays(1)).size(), 0);
+        QCOMPARE(loader.workouts(d, d.addDays(-1)).size(), 0);
+        QVERIFY(loader.workout(999).isEmpty());
+        QCOMPARE(loader.seq(), (qlonglong)db.seq());
+    }
+
+    void aDaysRowIsReadBack()
+    {
+        HealthMetricsLoader loader;
+        QVERIFY(loader.daily(day()).isEmpty());
+        HealthDb db(healthDbPath());
+        DailyTotals t;
+        t.steps = 9100;
+        t.kcal = 2300.5;
+        t.distanceM = 6600;
+        t.floors = 6;
+        t.azm = 31;
+        t.hoursMet = 8;
+        QVERIFY(db.setDailyTotals(day(), t, ms(QDate::currentDate(), 0, 20)));
+        const QVariantMap m = loader.daily(day());
+        QCOMPARE(m["date"].toDate(), day());
+        QVERIFY(m["closed"].toBool());
+        QCOMPARE(m["steps"].toInt(), 9100);
+        QCOMPARE(m["kcal"].toDouble(), 2300.5);
+        QCOMPARE(m["floors"].toInt(), 6);
+        QCOMPARE(m["azm"].toInt(), 31);
+        QCOMPARE(m["hoursMet"].toInt(), 8);
+        QCOMPARE(m["closedMs"].toLongLong(), ms(QDate::currentDate(), 0, 20));
+    }
+
+    void theEnergyFormulaIsTheOneOfTheHealthNumbers()
+    {
+        profileMale175();
+        HealthMetricsLoader loader;
+        const HealthProfile p = HealthProfile::load();
+        Minute walking;
+        walking.steps = 110;
+        Minute hard;
+        hard.steps = 150;
+        hard.hr = 160;
+        hard.hrCount = 1;
+        QCOMPARE(loader.minuteKcal(110, 0), activeKcalForMinute(walking, p, 60));
+        QCOMPARE(loader.minuteKcal(150, 160), activeKcalForMinute(hard, p, 60));
+        QCOMPARE(loader.minuteKcal(0, 0), 0.0);
+        QCOMPARE(loader.restingKcal(3600000), bmrKcalPerDay(p) * 3600000 / 86400000.0);
+        QCOMPARE(loader.restingKcal(-5), 0.0);
+        // a workout's energy, minute by minute, is energyKcal() of the same minutes
+        MinuteSeries series;
+        const qint64 t0 = ms(day(), 10, 0);
+        for (int i = 0; i < 30; i++) {
+            series.addSteps(t0 + i * 60000LL + 1000, 150);
+            series.addHr(t0 + i * 60000LL + 2000, 160);
+        }
+        double sum = loader.restingKcal(30 * 60000.0);
+        for (int i = 0; i < 30; i++)
+            sum += loader.minuteKcal(150, 160);
+        QVERIFY(qAbs(sum - energyKcal(series, t0, t0 + 30 * 60000LL, p, 60)) < 1e-9);
+    }
+
+    void theLoadersReadAgainWhenTheDaemonWrites()
+    {
+        SleepDataLoader sleep;
+        HealthMetricsLoader metrics;
+        WorkoutLoader workouts;
+        QSignalSpy s1(&sleep, &SleepDataLoader::dataChanged);
+        QSignalSpy s2(&metrics, &HealthMetricsLoader::dataChanged);
+        QSignalSpy s3(&workouts, &WorkoutLoader::dataChanged);
+        QDBusMessage signal = QDBusMessage::createSignal("/org/asteroid/sensorlogd/logger",
+                                                         "org.asteroid.sensorlogd.logger", "HealthChanged");
+        signal << qlonglong(7);
+        QVERIFY(QDBusConnection::sessionBus().send(signal));
+        QTRY_COMPARE(s1.count(), 1);
+        QTRY_COMPARE(s2.count(), 1);
+        QTRY_COMPARE(s3.count(), 1);
     }
 
     void lastNightIsTodaysOrYesterdays()

@@ -24,6 +24,11 @@
  *
  *   summary(date): { steps, distanceM, energyKcal, floors, zoneLight, zoneModerate, zoneVigorous, zonePeak,
  *                    azm, hoursMet, hoursTotal, hourSteps[24], restingHr, maxHr, strideM }
+ *   daily(date):   the day's row in health.db, as the daemon closed it after midnight (store/healthDb.h):
+ *                  { date, restingHr, closed, steps, kcal, distanceM, floors, azm, hoursMet, closedMs, seq }; {}
+ *                  if the day has none
+ *
+ * dataChanged: a step day file changed, or the daemon wrote to health.db (its D-Bus signal HealthChanged).
  */
 class HealthMetricsLoader : public QObject
 {
@@ -62,8 +67,21 @@ public:
     Q_INVOKABLE int defaultLowBpm();
     Q_INVOKABLE void refresh() { emit dataChanged(); }
 
+    // the day's row in health.db ({} if none)
+    Q_INVOKABLE QVariantMap daily(QDate date);
+
+    // The energy formula of the Health numbers (metrics/healthMetrics.h), for the Exercise app's workouts: the
+    // energy of a time is restingKcal(its length) plus minuteKcal() of each of its minutes (energyKcal())
+    // the active kcal of one minute with these steps and this mean heart rate (0: none), for the profile
+    Q_INVOKABLE double minuteKcal(int steps, double bpm);
+    // the resting energy of a time of this length
+    Q_INVOKABLE double restingKcal(double durationMs);
+
 signals:
     void dataChanged();
+
+private slots:
+    void onHealthChanged(qlonglong) { emit dataChanged(); }
 
 private:
     QFileSystemWatcher *m_fileWatcher;

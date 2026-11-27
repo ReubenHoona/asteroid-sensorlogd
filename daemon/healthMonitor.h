@@ -15,6 +15,7 @@
 #include <QDate>
 #include <QDateTime>
 #include <QObject>
+#include <QScopedPointer>
 #include <QSettings>
 #include <QTimer>
 
@@ -25,6 +26,8 @@
 #include "../metrics/healthMetrics.h"
 #include "../metrics/hrAlerts.h"
 #include "../metrics/moveReminder.h"
+#include "../store/healthDb.h"
+#include "../store/healthImport.h"
 
 class StepCounterPlugin;
 class HeartrateSensorPlugin;
@@ -32,7 +35,8 @@ class HeartrateSensorPlugin;
 /*
  * What the Health app does on its own account while the watch is worn: high and low heart rate alerts
  * (health-fitness-16), reminders to move and their celebrations (-15), the steps goal reached (-10, -14),
- * auto-detected exercise prompts (-28) and the nightly sleep estimate (-17).
+ * auto-detected exercise prompts (-28), the nightly sleep estimate (-17), and the rows of health.db it writes: the
+ * night, and the day closed on the first delivery after its midnight (stock WHS PRE_MIDNIGHT_FLUSH).
  *
  * The monitor is fed by the readings the sensor hub delivers (the plugins' stepsTaken and heartReading, with
  * the time each reading was taken) and looks at them when a delivery is over (the plugins' batchSettled), when
@@ -40,7 +44,8 @@ class HeartrateSensorPlugin;
  * besides the short settle delay is one single-shot to the next reminder minute of the window, started only
  * while reminders are on; like every Qt timer it does not run while the system is suspended, so a reminder
  * whose minute passed in suspend is made, if its hour is not over, when data arrives next: the sensor hub's
- * batch or a display on.
+ * batch or a display on. The one-time import into health.db (store/healthImport.h) runs from start(), one file or
+ * day at a time through the event loop (queued calls, no timer), so the daemon goes on answering meanwhile.
  *
  * Settings (QSettings asteroid/sensorlogd, written by the Health app through LoggerSettings):
  *   reminders/enabled (false), reminders/startHour (9), reminders/endHour (18), reminders/days (127)
@@ -65,6 +70,11 @@ public:
     // reads today's steps and the recent heart rate from what is logged, and begins to look at the minutes from now
     void start();
     void attach(StepCounterPlugin *steps, HeartrateSensorPlugin *heart);
+    // the daemon's health database (one writer: the Logger's); without one, start() opens its own
+    void setStore(Health::HealthDb *store) { m_store = store; }
+    Health::HealthDb *store() const { return m_store; }
+    // the one-time import is through (the days are closed from then on)
+    bool importDone() const { return m_import && m_import->done(); }
     // the clock the monitor goes by (ms since the epoch); the system's by default
     void setClock(std::function<qint64()> clock) { m_clock = clock; }
 
@@ -91,6 +101,7 @@ signals:
 
 private slots:
     void batchSettled();
+    void importStep();
 
 private:
     struct Settings {
@@ -108,6 +119,9 @@ private:
     uint post(HealthNotification n);
     void checkGoal();
     void checkSleep();
+    // the days before today that have data and no closed row in health.db: closed now
+    void closeDays();
+    bool dayTotals(const QDate &day, Health::DailyTotals *totals);
     QString clockText(qint64 ms) const;
     bool worn(qint64 nowMs) const;
 
@@ -133,6 +147,10 @@ private:
     QTimer *m_reminderTimer;
     MDConfItem *m_goalItem;
     MDConfItem *m_twelveHourItem;
+    Health::HealthDb *m_store = nullptr;
+    QScopedPointer<Health::HealthDb> m_ownStore;
+    QScopedPointer<Health::HealthImport> m_import;
+    QDate m_closedThrough; // the days up to it are closed (or have no data)
 };
 
 #endif // HEALTHMONITOR_H

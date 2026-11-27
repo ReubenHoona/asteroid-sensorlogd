@@ -69,6 +69,10 @@ public:
     // order. Reads through a connection of its own, read-only (the daemon writes in WAL mode meanwhile); a
     // database that is not there or cannot be read gives none, quietly, and is never made.
     static QVector<MinuteMean> minuteMeans(const QString &path, qint64 fromMs, qint64 toMs, int minAccuracy = 3);
+    // the time of the oldest reading (ms since the epoch), 0 if there is none; read as minuteMeans()
+    static qint64 firstTime(const QString &path);
+    // a reading of any accuracy in [fromMs, toMs)
+    static bool anyReading(const QString &path, qint64 fromMs, qint64 toMs);
 
 private:
     bool open();

@@ -1,10 +1,12 @@
 // The Health monitor (daemon/healthMonitor.*) on recorded readings: the high and low heart rate alerts with stock's
 // wording and the 12/24-hour time of the detail text, reminders to move with their celebrations and the state that
 // survives a restart, the steps goal reached once a day, the exercise prompts, the nightly sleep estimate stored
-// in sleep/<date>.json, and the plumbing from the step counter and heart rate plugins (stepsTaken with the time of
-// each reading, heartReading, batchSettled) to the evaluation. The readings are synthetic. The battery rules are
-// assertions too: the monitor has no periodic timer, its settle timer and the reminder timer are single-shot and
-// armed only by data, display on or an enabled reminder setting.
+// in health.db, the days closed there on the first delivery after midnight, the one-time import run from start(),
+// the Exercise app's new workout taken in when it ends, and the plumbing from the step counter and heart rate
+// plugins (stepsTaken with the time of each reading, heartReading, batchSettled) to the evaluation. The readings
+// are synthetic. The battery rules are assertions too: the monitor has no periodic timer, its settle timer and the
+// reminder timer are single-shot and armed only by data, display on or an enabled reminder setting; the import
+// goes through the event loop without a timer.
 #include <time.h>
 
 #include <QJsonDocument>
@@ -15,6 +17,7 @@
 #include "peek.h"
 #include "../common.h"
 #include "../metrics/healthData.h"
+#include "../store/healthDb.h"
 #include "testenv.h"
 
 using namespace Health;
@@ -590,15 +593,17 @@ private slots:
         // 06:45: the night ended 15 minutes ago: not yet
         HealthMonitor *m = make(ms(THU, 6, 45));
         m->evaluate();
-        QVERIFY(!QFile::exists(sleepFilePath(THU)));
+        QVERIFY(!HealthDb::readNight(healthDbPath(), THU, nullptr));
         // 07:00: not looked at again within 30 minutes
         clock = ms(THU, 7, 0);
         m->evaluate();
-        QVERIFY(!QFile::exists(sleepFilePath(THU)));
-        // 07:20: stored
+        QVERIFY(!HealthDb::readNight(healthDbPath(), THU, nullptr));
+        // 07:20: stored, in health.db (no file)
         clock = ms(THU, 7, 20);
         m->evaluate();
-        QVERIFY(QFile::exists(sleepFilePath(THU)));
+        SleepNight inDb;
+        QVERIFY(HealthDb::readNight(healthDbPath(), THU, &inDb));
+        QVERIFY(!QFile::exists(sleepFilePath(THU)));
         QCOMPARE(testenv::setting("HealthPrivate/sleepStored").toString(), QString("2026-11-12"));
         bool stored = false;
         const SleepNight n = loadSleep(THU, HealthProfile(), 60, &stored);
@@ -607,16 +612,90 @@ private slots:
         QCOMPARE(n.main.startMs, ms(eve, 22, 30));
         QCOMPARE(n.main.asleepMin, 480);
         QCOMPARE(n.wakeDate, THU);
+        QCOMPARE(n.toMap(), inDb.toMap());
         // once stored it is not looked at again
-        QFile f(sleepFilePath(THU));
-        QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
-        f.write("{\"valid\":false}");
-        f.close();
+        const qint64 seq = m->store()->seq();
         clock = ms(THU, 9, 0);
         m->evaluate();
-        QFile again(sleepFilePath(THU));
-        QVERIFY(again.open(QIODevice::ReadOnly));
-        QCOMPARE(again.readAll(), QByteArray("{\"valid\":false}"));
+        QCOMPARE(m->store()->seq(), seq);
+    }
+
+    // ---- health.db: the import at start, the days closed after midnight, the Exercise app's workouts ----
+    void theImportRunsFromStartThroughTheEventLoop()
+    {
+        const QDate wed = THU.addDays(-1);
+        testenv::writeDay("stepCounter", wed, QByteArray::number(ms(wed, 9, 9) / 1000) + ":300\n"
+                                                  + QByteArray::number(ms(wed, 14, 10) / 1000) + ":1100\n");
+        QDir().mkpath(testenv::root() + "exercise");
+        QFile log(testenv::root() + "exercise/" + wed.toString("yyyy-MM-dd") + ".log");
+        QVERIFY(log.open(QIODevice::WriteOnly));
+        log.write(QByteArray::number(ms(wed, 7, 0) / 1000) + ":1800:walk:2400:160:110:130:3300\n");
+        log.close();
+        HealthMonitor *m = make(ms(THU, 9, 0));
+        QVERIFY(!m->importDone()); // not inside start()
+        QCOMPARE(m->findChildren<QTimer *>().size(), 2); // and with no timer of its own
+        QTRY_VERIFY(m->importDone());
+        DailyRecord r;
+        QVERIFY(HealthDb::readDaily(healthDbPath(), wed, &r));
+        QVERIFY(r.closed);
+        QCOMPARE(r.totals.steps, 1100);
+        QCOMPARE(HealthDb::readWorkouts(healthDbPath(), 0, ms(THU, 0)).size(), 1);
+        QVERIFY(!HealthDb::readDaily(healthDbPath(), THU, nullptr)); // today is not over
+        QVERIFY(!m->m_settle->isActive());
+        QVERIFY(!m->m_reminderTimer->isActive());
+    }
+
+    void aDayIsClosedOnTheFirstDeliveryAfterMidnight()
+    {
+        HealthMonitor *m = make(ms(THU, 22, 0));
+        QTRY_VERIFY(m->importDone());
+        // Thursday has steps; Friday 00:40 the first batch comes
+        testenv::writeDay("stepCounter", THU, QByteArray::number(ms(THU, 10, 0) / 1000) + ":4200\n"
+                                                  + QByteArray::number(ms(THU, 23, 59, 59) / 1000) + ":6100\n");
+        m->evaluate();
+        QVERIFY(!HealthDb::readDaily(healthDbPath(), THU, nullptr)); // 22:00: not over
+        clock = ms(THU.addDays(1), 0, 40);
+        m->evaluate();
+        DailyRecord r;
+        QVERIFY(HealthDb::readDaily(healthDbPath(), THU, &r));
+        QVERIFY(r.closed);
+        QCOMPARE(r.totals.steps, 6100);
+        QCOMPARE(r.closedMs, ms(THU.addDays(1), 0, 40));
+        QCOMPARE(r.totals.distanceM, distanceM(6100, HealthProfile()));
+        // closed once: the next deliveries leave it
+        const qint64 seq = m->store()->seq();
+        clock = ms(THU.addDays(1), 1, 30);
+        m->evaluate();
+        QCOMPARE(m->store()->seq(), seq);
+        // three days off (no daemon): the next start closes the ones with data
+        const QDate sat = THU.addDays(2);
+        testenv::writeDay("stepCounter", sat, QByteArray::number(ms(sat, 11, 0) / 1000) + ":2500\n");
+        HealthMonitor *again = make(ms(THU.addDays(4), 8, 0));
+        QVERIFY(again->importDone()); // marked done in the database
+        QVERIFY(HealthDb::readDaily(healthDbPath(), sat, &r));
+        QCOMPARE(r.totals.steps, 2500);
+        QVERIFY(!HealthDb::readDaily(healthDbPath(), THU.addDays(1), nullptr)); // no data: no row
+        QVERIFY(!HealthDb::readDaily(healthDbPath(), THU.addDays(3), nullptr));
+    }
+
+    void aWorkoutTheExerciseAppLoggedComesInWhenItEnds()
+    {
+        HealthMonitor *m = make(ms(THU, 18, 0));
+        QTRY_VERIFY(m->importDone());
+        m->setWorkoutActive(true);
+        QDir().mkpath(testenv::root() + "exercise");
+        QFile log(testenv::root() + "exercise/" + THU.toString("yyyy-MM-dd") + ".log");
+        QVERIFY(log.open(QIODevice::Append));
+        log.write(QByteArray::number(ms(THU, 17, 15) / 1000) + ":2400:run:6000:400:150:170:7000\n");
+        log.close();
+        QCOMPARE(HealthDb::readWorkouts(healthDbPath(), 0, ms(THU.addDays(1), 0)).size(), 0);
+        m->setWorkoutActive(false); // the app logged the line, then said so
+        const QList<WorkoutRecord> ws = HealthDb::readWorkouts(healthDbPath(), 0, ms(THU.addDays(1), 0));
+        QCOMPARE(ws.size(), 1);
+        QCOMPARE(ws[0].type, QString("run"));
+        QCOMPARE(ws[0].activeS, 2400);
+        m->setWorkoutActive(false);
+        QCOMPARE(HealthDb::readWorkouts(healthDbPath(), 0, ms(THU.addDays(1), 0)).size(), 1);
     }
 
     void noSleepIsEstimatedAtNightOrWithoutAHeartRate()
@@ -626,7 +705,7 @@ private slots:
         QVERIFY(m->m_sleepAttemptMs == 0);
         clock = ms(THU, 8, 0);
         m->evaluate(); // no data: nothing to store, tried again later
-        QVERIFY(!QFile::exists(sleepFilePath(THU)));
+        QVERIFY(!HealthDb::readNight(healthDbPath(), THU, nullptr));
         QVERIFY(m->m_sleepAttemptMs != 0);
         clock = ms(THU, 21, 0);
         m->m_sleepAttemptMs = 0;
