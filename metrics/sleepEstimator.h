@@ -35,7 +35,8 @@ namespace Health {
  *   (offBody/). Without them (an older sensorlogd, a night before M4, the streams or the provider off) the
  *   estimate goes by the steps and the heart rate alone, as version 1 did.
  *
- * A minute (of the window from 18:00 the evening before to 18:00 of the morning's day):
+ * A minute (of the window from 18:00 the evening before to 20:00 of the morning's day: R5 E-30, the evening's naps
+ * up to 20:00 are looked for; version 2 ended it at 18:00):
  *   worn      the off-body sensor says on the wrist; or, where it does not know, the minute has a heart rate
  *             reading or readings on both sides within HR_REACH_MIN. Off the wrist: not worn, and any heart rate
  *             reading of the minute is left out (the hub measures only on the wrist; one from then is not the
@@ -48,15 +49,19 @@ namespace Health {
  *             the display is on, so this is someone using the watch (guess)
  *   asleep    worn, not stepping, not busy, and the heart rate within the lower fifth of the heart rate reserve
  *             above resting (from 08:00 of the morning's day within the lower tenth, as near resting as a nap is:
- *             an hour at the desk is no sleep; guess); a still, worn minute without any heart rate counts too
+ *             an hour at the desk is no sleep; guess); a still, worn minute without any heart rate counts too.
+ *             Bedtime mode is a hint, never needed (R5 E-30; PLAN WO-06): in a night minute with Bedtime on
+ *             (bedtime/, the launcher's mode as sensorlogd logs it) the lower fourth of the reserve (guess)
  * Asleep minutes separated by no more than 15 minutes make a session, the gap minutes awake time inside it; a gap
  * with the watch off the wrist ends the session. A session begins at its first minute whose heart rate and the mean
  * of the 10 minutes from it are no more than 10 bpm above the session's lower quartile, and ends at the last such
  * minute: what is before and after is awake in bed or an evening on the sofa (guess). The main sleep is the
- * longest session that began between 20:00 and 08:00 with at least an hour asleep (stock recognises sleep after
- * about an hour still: Google's sleep help page). Naps: other sessions that begin from 08:00 with at least NAP_MIN
- * asleep minutes, a heart rate near resting and readings in most of their minutes; 20 minutes from Google's page
- * (CP3A's strings name no length; version 1 had 30).
+ * longest session that began between 20:00 and 08:00 (from 19:00 when it began with Bedtime on: R5 E-30) with at
+ * least an hour asleep (stock recognises sleep after about an hour still: Google's sleep help page). Naps: other
+ * sessions that begin from 08:00 and are over before the window's end (one still going at 20:00 is the next
+ * night's, not a nap) with at least NAP_MIN asleep minutes, a heart rate near resting and readings in most of their
+ * minutes; 20 minutes from Google's page (CP3A's strings name no length; version 1 had 30). A day with naps and no
+ * main sleep keeps its naps (R5 E-30: SleepNight.valid false, naps set).
  *
  * Stages (guesses, in the stock names, per minute, then as a timeline): Awake for the session's minutes that are
  * not asleep. Among the asleep ones, by the 5-minute mean heart rate: the lowest fifth is Deep, the highest fifth
@@ -121,7 +126,13 @@ struct SleepContext {
     QList<QPointF> motion;  // motion/: 1 movement began, 0 stillness began, 2 the detectors armed again
     QList<QPointF> cadence; // stepCadence/: a minute's start, its steps a minute
     QList<QPointF> offBody; // offBody/: 1 off the wrist, 0 on, -1 unknown
+    QList<QPointF> bedtime; // bedtime/: 1 Bedtime mode on, 0 off (R5 E-30)
 };
+
+// the end of a night's window on the morning's day, hours (R5 E-30: 20, the evening's naps; version 2 had 18)
+static const int SLEEP_WINDOW_END_HOUR = 20;
+// what the bedtime records say of each minute: 1 Bedtime mode on, 0 off or unknown
+QVector<char> bedtimeMinutes(const QList<QPointF> &records, qint64 fromMinute, int n);
 
 // what the motion records say of each minute of [fromMinute, fromMinute + n)
 enum MotionMinute { MotionUnknown = 0, MotionStill = 1, MotionMoved = 2, MotionBusy = 3 };

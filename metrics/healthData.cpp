@@ -192,11 +192,12 @@ QList<QPointF> loadRecords(const QString &prefix, qint64 fromMs, qint64 toMs)
 SleepContext loadSleepContext(const QDate &wakeDate)
 {
     const qint64 from = QDateTime(wakeDate.addDays(-1), QTime(18, 0)).toMSecsSinceEpoch();
-    const qint64 to = QDateTime(wakeDate, QTime(18, 0)).toMSecsSinceEpoch();
+    const qint64 to = QDateTime(wakeDate, QTime(SLEEP_WINDOW_END_HOUR, 0)).toMSecsSinceEpoch();
     SleepContext c;
     c.motion = loadStateRecords(QStringLiteral("motion"), from, to, 1);
     c.cadence = loadRecords(QStringLiteral("stepCadence"), from, to);
     c.offBody = loadStateRecords(QStringLiteral("offBody"), from, to);
+    c.bedtime = loadStateRecords(QStringLiteral("bedtime"), from, to);
     return c;
 }
 
@@ -206,7 +207,7 @@ SleepNight estimateNight(const QDate &wakeDate, const HealthProfile &profile, in
     loadSteps(series, wakeDate.addDays(-1));
     loadSteps(series, wakeDate);
     const qint64 from = QDateTime(wakeDate.addDays(-1), QTime(18, 0)).toMSecsSinceEpoch();
-    const qint64 to = QDateTime(wakeDate, QTime(18, 0)).toMSecsSinceEpoch();
+    const qint64 to = QDateTime(wakeDate, QTime(SLEEP_WINDOW_END_HOUR, 0)).toMSecsSinceEpoch();
     // no heart rate off the wrist (M4 WO-03): a reading from then is not the wearer's
     loadHeartRate(series, from, to, offWristRanges(from, to));
     return estimateSleep(series, wakeDate, profile, restingHr, profile.sleepGoalMin, loadSleepContext(wakeDate));

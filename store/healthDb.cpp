@@ -746,7 +746,8 @@ bool HealthDb::importWorkout(const WorkoutRecord &w)
 
 bool HealthDb::storeNight(const SleepNight &night, const QString &algo, const QString &importedFrom, bool onlyIfNone)
 {
-    if (!night.valid || !night.wakeDate.isValid())
+    // a night, or a day's naps without one (R5 E-30)
+    if ((!night.valid && night.naps.isEmpty()) || !night.wakeDate.isValid())
         return false;
     const QString wake = night.wakeDate.toString(Qt::ISODate);
     const qint64 before = seq();
@@ -791,7 +792,8 @@ bool HealthDb::storeNight(const SleepNight &night, const QString &algo, const QS
         }
         return true;
     };
-    ok = ok && insert(night.main, true);
+    if (night.valid)
+        ok = ok && insert(night.main, true);
     for (const SleepSession &nap : night.naps)
         ok = ok && insert(nap, false);
     if (!ok) {
@@ -1111,8 +1113,12 @@ bool HealthDb::readNight(const QString &path, const QDate &wakeDate, SleepNight 
             n.napMin += s.asleepMin;
         }
     }
-    if (!n.valid)
+    if (!n.valid) {
+        // naps without a night (R5 E-30): no night, but its naps for a caller that asks
+        if (night)
+            *night = n;
         return false;
+    }
     // what the estimator derives from these (sleepEstimator.cpp)
     n.scoreLabel = sleepScoreLabel(n.score);
     n.goalMet = n.main.asleepMin >= n.goalMin;

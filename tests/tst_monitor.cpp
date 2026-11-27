@@ -1206,9 +1206,9 @@ private slots:
         m->evaluate(); // no data: nothing to store, tried again later
         QVERIFY(!HealthDb::readNight(healthDbPath(), THU, nullptr));
         QVERIFY(m->m_sleepAttemptMs != 0);
-        clock = ms(THU, 21, 0);
+        clock = ms(THU, 22, 30);
         m->m_sleepAttemptMs = 0;
-        m->evaluate(); // evening: not looked at
+        m->evaluate(); // late evening: not looked at (to 22:00 for the evening's naps, R5 E-30)
         QVERIFY(m->m_sleepAttemptMs == 0);
     }
 };

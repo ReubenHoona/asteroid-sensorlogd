@@ -27,6 +27,7 @@
 using namespace Health;
 
 static const char *const TWELVE_HOUR_KEY = "/org/asteroidos/settings/use-12h-format";
+static const char *const BEDTIME_KEY = "/org/asteroidos/modes/bedtime"; // the launcher's Bedtime mode (modes.h)
 static const int GOAL_CHECK_MS = 10 * 60 * 1000; // a goal of another type than steps: its day summary at most this often
 static const int PROFILE_CACHE_MS = 10 * 60 * 1000;
 static const int SLEEP_RETRY_MS = 30 * 60 * 1000;
@@ -44,6 +45,8 @@ HealthMonitor::HealthMonitor(QSettings *settings, NotificationPoster *poster, QO
     for (const QString &key : mainGoalKeys())
         m_goalItems << new MDConfItem(key, this);
     m_twelveHourItem = new MDConfItem(TWELVE_HOUR_KEY, this);
+    m_bedtimeItem = new MDConfItem(BEDTIME_KEY, this);
+    connect(m_bedtimeItem, &MDConfItem::valueChanged, this, &HealthMonitor::recordBedtime);
     m_settle = new QTimer(this);
     m_settle->setSingleShot(true);
     connect(m_settle, &QTimer::timeout, this, &HealthMonitor::evaluate);
@@ -109,6 +112,7 @@ void HealthMonitor::start()
     m_move.setState(state);
     loadProfile(true);
     armReminderTimer();
+    recordBedtime();
 
     // health.db: the daemon's (one writer), or one of our own
     if (!m_store) {
@@ -574,13 +578,15 @@ void HealthMonitor::checkGoal()
 // SLEEP_QUIET_MS past the night's last asleep minute; stored in health.db (sleep_session and its stage timeline in
 // sleep_stage, the estimate of version 2: SLEEP_ALGO_V2, sleepEstimator.h). Later that day, a nap that is over (as
 // long quiet) is stored with it: the morning's main sleep as it was stored, the day's naps (stock lists them:
-// "Naps", "Nap from %1$s to %2$s"); nothing is written when no nap is new. Tried at most every SLEEP_RETRY_MS
-// (05:00-20:00), on data deliveries only.
+// "Naps", "Nap from %1$s to %2$s"); nothing is written when no nap is new. A day of naps and no night keeps its naps
+// too (R5 E-30). Tried at most every SLEEP_RETRY_MS (05:00-22:00: the evening's naps up to 20:00 are over and quiet
+// by then), on data deliveries only.
 void HealthMonitor::checkSleep()
 {
     const qint64 t = now();
     const QDateTime local = QDateTime::fromMSecsSinceEpoch(t);
-    if (local.time().hour() < 5 || local.time().hour() >= 20)
+    // to 22:00: an evening nap of the night's window (up to 20:00, R5 E-30) is over and quiet by then
+    if (local.time().hour() < 5 || local.time().hour() >= SLEEP_WINDOW_END_HOUR + 2)
         return;
     const QString today = local.date().toString(Qt::ISODate);
     if (m_sleepAttemptMs != 0 && t >= m_sleepAttemptMs && t - m_sleepAttemptMs < SLEEP_RETRY_MS)
@@ -589,7 +595,10 @@ void HealthMonitor::checkSleep()
     const bool stored = m_settings->value("HealthPrivate/sleepStored", QString()).toString() == today;
     const int rhr = effectiveRestingHr(m_profile, m_restingEstimate);
     SleepNight night = estimateNight(local.date(), m_profile, rhr);
-    if (!night.valid || t - night.main.endMs < SLEEP_QUIET_MS)
+    // no night, but naps (R5 E-30): they are kept too, as a night's are
+    if (!night.valid && night.naps.isEmpty())
+        return;
+    if (night.valid && t - night.main.endMs < SLEEP_QUIET_MS)
         return;
     // the naps that are over
     QList<SleepSession> naps;
@@ -606,7 +615,8 @@ void HealthMonitor::checkSleep()
     };
     if (stored) {
         SleepNight inDb;
-        if (!m_store || !HealthDb::readNight(m_store->path(), local.date(), &inDb))
+        // a stored day of naps alone has no night: its naps still come back
+        if (!m_store || (!HealthDb::readNight(m_store->path(), local.date(), &inDb) && inDb.naps.isEmpty()))
             return;
         QList<SleepSession> all = inDb.naps;
         bool added = false;
@@ -626,11 +636,28 @@ void HealthMonitor::checkSleep()
         return;
     }
     setNaps(night, naps);
+    if (!night.valid && night.naps.isEmpty())
+        return; // the naps are not over yet
     if (m_store && m_store->storeNight(night, QString::fromLatin1(SLEEP_ALGO_V2))) {
         m_settings->setValue("HealthPrivate/sleepStored", today);
         // the day's resting heart rate: once, over the 24 hours up to the night's end
-        storeRestingHr(local.date(), night.main.endMs);
+        if (night.valid)
+            storeRestingHr(local.date(), night.main.endMs);
     }
+}
+
+// Bedtime mode as the sleep estimate's hint (R5 E-30): its changes in bedtime/ (1 on, 0 off), a record only when the
+// state is another than the last one logged. The launcher switches it while the system is awake (the user, its
+// schedule), so the dconf change reaches the daemon then: no wake for it
+void HealthMonitor::recordBedtime()
+{
+    const qint64 t = now();
+    const int state = m_bedtimeItem->value(false).toBool() ? 1 : 0;
+    const QList<QPointF> last = loadStateRecords(QStringLiteral("bedtime"), t + 1, t + 1, 30);
+    if (last.isEmpty() ? state == 0 : (int)last.last().y() == state)
+        return;
+    setupFilePath(QStringLiteral("bedtime"));
+    fileAddRecord(QStringLiteral("bedtime"), QString::number(state), QDateTime::fromMSecsSinceEpoch(t));
 }
 
 void HealthMonitor::setSkinTempAvailable(bool available)

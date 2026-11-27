@@ -150,6 +150,32 @@ QVector<signed char> offBodyMinutes(const QList<QPointF> &records, qint64 fromMi
     return out;
 }
 
+QVector<char> bedtimeMinutes(const QList<QPointF> &records, qint64 fromMinute, int n)
+{
+    QVector<char> out(qMax(0, n), 0);
+    QList<QPointF> sorted = records;
+    std::stable_sort(sorted.begin(), sorted.end(), [](const QPointF &a, const QPointF &b) { return a.x() < b.x(); });
+    char state = 0;
+    int k = 0;
+    for (int i = 0; i < n; i++) {
+        const double minuteStart = MinuteSeries::msOf(fromMinute + i) / 1000.0;
+        const double minuteEnd = MinuteSeries::msOf(fromMinute + i + 1) / 1000.0;
+        // the state the minute begins in (a change at its start included); Bedtime on at any time of it counts
+        while (k < sorted.size() && sorted[k].x() <= minuteStart) {
+            state = sorted[k].y() >= 0.5 ? 1 : 0;
+            k++;
+        }
+        bool on = state == 1;
+        while (k < sorted.size() && sorted[k].x() < minuteEnd) {
+            state = sorted[k].y() >= 0.5 ? 1 : 0;
+            on = on || state == 1;
+            k++;
+        }
+        out[i] = on ? 1 : 0;
+    }
+    return out;
+}
+
 SleepNight estimateSleep(const MinuteSeries &series, const QDate &wakeDate, const HealthProfile &profile, int restingHr,
                          int goalMin, const SleepContext &context)
 {
@@ -157,12 +183,14 @@ SleepNight estimateSleep(const MinuteSeries &series, const QDate &wakeDate, cons
     night.wakeDate = wakeDate;
     night.goalMin = goalMin;
     const qint64 fromMin = MinuteSeries::minuteOf(QDateTime(wakeDate.addDays(-1), QTime(18, 0)).toMSecsSinceEpoch());
-    const qint64 toMin = MinuteSeries::minuteOf(QDateTime(wakeDate, QTime(18, 0)).toMSecsSinceEpoch());
+    const qint64 toMin =
+            MinuteSeries::minuteOf(QDateTime(wakeDate, QTime(SLEEP_WINDOW_END_HOUR, 0)).toMSecsSinceEpoch());
     const int n = (int)(toMin - fromMin);
     if (n <= 0 || series.isEmpty())
         return night;
 
     const QVector<signed char> off = offBodyMinutes(context.offBody, fromMin, n);
+    const QVector<char> inBed = bedtimeMinutes(context.bedtime, fromMin, n);
     const QVector<char> motion = motionMinutes(context.motion, fromMin, n);
     QVector<char> cadence(n, 0);
     for (const QPointF &c : context.cadence) {
@@ -217,10 +245,13 @@ SleepNight estimateSleep(const MinuteSeries &series, const QDate &wakeDate, cons
     // morning's day) within the lower tenth, as near resting as a nap is (an hour at the desk is no sleep: guess)
     const double calm = restingHr + 0.20 * qMax(1, profile.maxHr() - restingHr);
     const double napCalm = restingHr + 0.10 * qMax(1, profile.maxHr() - restingHr);
+    // in Bedtime the lower fourth (R5 E-30, guess): the mode says the wearer means to sleep
+    const double bedCalm = restingHr + 0.25 * qMax(1, profile.maxHr() - restingHr);
     const qint64 dayFrom = MinuteSeries::minuteOf(QDateTime(wakeDate, QTime(8, 0)).toMSecsSinceEpoch()) - fromMin;
     for (int i = 0; i < n; i++)
         candidate[i] = worn[i] && !stepping[i] && motion[i] != MotionBusy &&
-                       (hr[i] > 0 ? hr[i] <= (i >= dayFrom ? napCalm : calm) : motion[i] == MotionStill);
+                       (hr[i] > 0 ? hr[i] <= (i >= dayFrom ? napCalm : inBed[i] ? bedCalm : calm)
+                                  : motion[i] == MotionStill);
 
     // sessions: candidate runs joined over gaps of up to MERGE_GAP_MIN in which the watch stayed on
     auto findRuns = [&]() {
@@ -414,8 +445,9 @@ SleepNight estimateSleep(const MinuteSeries &series, const QDate &wakeDate, cons
         return made;
     };
 
-    // the main sleep: the longest session that began between 20:00 and 08:00
+    // the main sleep: the longest session that began between 20:00 (19:00 in Bedtime) and 08:00
     const qint64 mainFrom = QDateTime(wakeDate.addDays(-1), QTime(20, 0)).toMSecsSinceEpoch();
+    const qint64 mainFromInBed = QDateTime(wakeDate.addDays(-1), QTime(19, 0)).toMSecsSinceEpoch();
     const qint64 mainTo = QDateTime(wakeDate, QTime(8, 0)).toMSecsSinceEpoch();
     const qint64 napFrom = mainTo; // 08:00
     int mainIndex = -1;
@@ -424,7 +456,8 @@ SleepNight estimateSleep(const MinuteSeries &series, const QDate &wakeDate, cons
         const qint64 start = MinuteSeries::msOf(fromMin + runs[r].first);
         const int length = runs[r].last - runs[r].first + 1;
         const int asleepCount = std::count(candidate.begin() + runs[r].first, candidate.begin() + runs[r].last + 1, 1);
-        if (start >= mainFrom && start <= mainTo && asleepCount >= MAIN_MIN && length > mainLen) {
+        const bool began = start >= mainFrom || (inBed[runs[r].first] && start >= mainFromInBed);
+        if (began && start <= mainTo && asleepCount >= MAIN_MIN && length > mainLen) {
             mainIndex = r;
             mainLen = length;
         }
@@ -443,7 +476,9 @@ SleepNight estimateSleep(const MinuteSeries &series, const QDate &wakeDate, cons
         const SleepSession &s = made.s;
         // a nap is in the daytime (a part of the night the main sleep did not take in is not one), near resting,
         // and the heart rate was read in most of it (not a watch lying still with the sensor unsure)
-        if (s.startMs >= napFrom && s.asleepMin >= NAP_MIN && s.avgHr <= napCalm && 2 * made.readings >= s.asleepMin) {
+        // one still going at the window's end is the next night's (an early night), not a nap
+        if (s.startMs >= napFrom && runs[r].last < n - 1 && s.asleepMin >= NAP_MIN && s.avgHr <= napCalm
+            && 2 * made.readings >= s.asleepMin) {
             night.naps.append(s);
             night.napMin += s.asleepMin;
         }

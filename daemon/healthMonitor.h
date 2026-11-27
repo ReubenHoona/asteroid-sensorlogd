@@ -173,6 +173,8 @@ private slots:
     void wakeTimedOut();
     // the morning's skin temperature night, once its night is stored and the sampling is off
     void checkSkinTemp();
+    // Bedtime mode on or off: a record in bedtime/ when it changed (R5 E-30)
+    void recordBedtime();
 
 private:
     struct Settings {
@@ -245,6 +247,7 @@ private:
     };
     QList<HeldCelebration> m_held;   // celebrations of a workout's time, posted at its end
     MDConfItem *m_twelveHourItem;
+    MDConfItem *m_bedtimeItem;
     Health::HealthDb *m_store = nullptr;
     QScopedPointer<Health::HealthDb> m_ownStore;
     QScopedPointer<Health::HealthImport> m_import;
