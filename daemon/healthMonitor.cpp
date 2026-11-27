@@ -50,7 +50,11 @@ HealthMonitor::HealthMonitor(QSettings *settings, NotificationPoster *poster, QO
     reloadSettings();
 }
 
-HealthMonitor::~HealthMonitor() {}
+HealthMonitor::~HealthMonitor()
+{
+    if (m_holdingChanges && m_store)
+        m_store->releaseChanges();
+}
 
 void HealthMonitor::reloadSettings()
 {
@@ -113,6 +117,11 @@ void HealthMonitor::start()
                                     [this](const QDate &day, DailyTotals *totals) { return dayTotals(day, totals); },
                                     [this](const QDate &day) { return restingOf(day, nightEndOf(day)); }, m_day));
     if (!m_import->done()) {
+        // one HealthChanged for the whole import, not one for every file and day
+        if (!m_holdingChanges) {
+            m_store->holdChanges();
+            m_holdingChanges = true;
+        }
         QMetaObject::invokeMethod(this, "importStep", Qt::QueuedConnection);
     } else {
         // workouts the Exercise app logged while the daemon was not running
@@ -128,6 +137,10 @@ void HealthMonitor::importStep()
     if (m_import->step()) {
         QMetaObject::invokeMethod(this, "importStep", Qt::QueuedConnection);
         return;
+    }
+    if (m_holdingChanges) {
+        m_holdingChanges = false;
+        m_store->releaseChanges();
     }
     if (!m_import->done())
         return; // could not be marked: the next start goes on

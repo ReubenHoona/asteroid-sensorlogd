@@ -145,6 +145,10 @@ public:
     const QString &path() const { return m_path; }
     // called after every write that changed something, with the counter after it
     void setChangeHandler(std::function<void(qint64)> handler) { m_onChange = handler; }
+    // While held (a run of many writes: the one-time import), writes do not call the handler; the last release
+    // calls it once if anything changed meanwhile. Holds nest.
+    void holdChanges() { m_held++; }
+    void releaseChanges();
 
     qint64 seq();
     QVariant meta(const QString &key);
@@ -211,6 +215,8 @@ private:
     sqlite3 *m_db = nullptr;
     bool m_warned = false;
     std::function<void(qint64)> m_onChange;
+    int m_held = 0;
+    bool m_changedWhileHeld = false;
 };
 
 } // namespace Health

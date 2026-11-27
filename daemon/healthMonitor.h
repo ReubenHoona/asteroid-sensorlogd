@@ -155,6 +155,7 @@ private:
     Health::HealthDb *m_store = nullptr;
     QScopedPointer<Health::HealthDb> m_ownStore;
     QScopedPointer<Health::HealthImport> m_import;
+    bool m_holdingChanges = false; // the import's writes tell the readers once, at its end
     QDate m_closedThrough; // the days up to it are closed (or have no data)
 };
 

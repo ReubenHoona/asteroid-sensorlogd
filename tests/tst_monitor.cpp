@@ -733,10 +733,26 @@ private slots:
         QVERIFY(log.open(QIODevice::WriteOnly));
         log.write(QByteArray::number(ms(wed, 7, 0) / 1000) + ":1800:walk:2400:160:110:130:3300\n");
         log.close();
-        HealthMonitor *m = make(ms(THU, 9, 0));
+        // the daemon's store, which tells the readers (HealthChanged) after its writes
+        HealthDb store(healthDbPath());
+        QList<qint64> told;
+        store.setChangeHandler([&](qint64 seq) { told << seq; });
+        monitor.reset();
+        clock = ms(THU, 9, 0);
+        monitor.reset(new HealthMonitor(settings, &poster));
+        monitor->setClock([this] { return clock; });
+        monitor->setStore(&store);
+        monitor->start();
+        HealthMonitor *m = monitor.data();
         QVERIFY(!m->importDone()); // not inside start()
         QCOMPARE(m->findChildren<QTimer *>().size(), 2); // and with no timer of its own
         QTRY_VERIFY(m->importDone());
+        // a workout and a day written: the readers are told once, at the end
+        QCOMPARE(told.size(), 1);
+        QCOMPARE(told[0], store.seq());
+        QVERIFY(store.seq() >= 2);
+        QVERIFY(store.beginWorkout(ms(THU, 8, 0), "walk") > 0); // and after it, every write again
+        QCOMPARE(told.size(), 2);
         DailyRecord r;
         QVERIFY(HealthDb::readDaily(healthDbPath(), wed, &r));
         QVERIFY(r.closed);
@@ -745,6 +761,7 @@ private slots:
         QVERIFY(!HealthDb::readDaily(healthDbPath(), THU, nullptr)); // today is not over
         QVERIFY(!m->m_settle->isActive());
         QVERIFY(!m->m_reminderTimer->isActive());
+        monitor.reset(); // before the store goes
     }
 
     void aDayIsClosedOnTheFirstDeliveryAfterMidnight()

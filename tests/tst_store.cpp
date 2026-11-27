@@ -301,6 +301,25 @@ private slots:
                                    "sleep_session UNION ALL SELECT MAX(seq) FROM daily)"), db.seq());
     }
 
+    void aHoldTellsOnceAtTheEnd()
+    {
+        HealthDb db(path());
+        QList<qint64> told;
+        db.setChangeHandler([&](qint64 s) { told << s; });
+        db.holdChanges();
+        db.holdChanges(); // nested
+        QVERIFY(db.beginWorkout(ms(MON, 8), "walk") > 0);
+        QVERIFY(db.setDailyRestingHr(MON, 55));
+        db.releaseChanges();
+        QVERIFY(told.isEmpty());
+        db.releaseChanges();
+        QCOMPARE(told, QList<qint64>({2}));
+        db.releaseChanges(); // not held: nothing
+        db.holdChanges();
+        db.releaseChanges(); // nothing written: nobody told
+        QCOMPARE(told.size(), 1);
+    }
+
     void theSequenceSurvivesARestart()
     {
         qint64 last = 0;

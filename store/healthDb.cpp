@@ -423,9 +423,22 @@ bool HealthDb::commit(qint64 seqBefore)
         return false;
     }
     const qint64 after = seq();
-    if (after != seqBefore && m_onChange)
-        m_onChange(after);
+    if (after != seqBefore) {
+        if (m_held > 0)
+            m_changedWhileHeld = true;
+        else if (m_onChange)
+            m_onChange(after);
+    }
     return true;
+}
+
+void HealthDb::releaseChanges()
+{
+    if (m_held == 0 || --m_held > 0 || !m_changedWhileHeld)
+        return;
+    m_changedWhileHeld = false;
+    if (m_onChange)
+        m_onChange(seq());
 }
 
 void HealthDb::rollback(bool sqlError)
