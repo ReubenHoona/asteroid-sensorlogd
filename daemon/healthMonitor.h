@@ -26,6 +26,7 @@
 #include "../metrics/healthMetrics.h"
 #include "../metrics/hrAlerts.h"
 #include "../metrics/moveReminder.h"
+#include "../metrics/skinTemp.h"
 #include "../store/healthDb.h"
 #include "../store/healthImport.h"
 
@@ -62,6 +63,13 @@ class HeartrateSensorPlugin;
  * logger's OffBodyPlugin, M4 WO-03; stock gates on it too: sysui's LlobDetector, the hub's algorithms); when it does
  * not (the provider off in eos-usf.conf, an older sensorfwd, the hub not up), a heart rate within WORN_MS, as
  * before (the hub measures only on the wrist).
+ *
+ * Skin temperature (M4 WO-13, metrics/skinTemp.h): at every look the monitor decides whether the hub's skin
+ * temperature should be sampled now (skinTempWanted: inside a night's sleep) and says so (skinTempSamplingChanged;
+ * the logger's SkinTempPlugin subscribes then); health.db meta 'skin_temp.on_ms' (since when it runs, 0: not) and
+ * 'skin_temp.off_ms' (when it last stopped) are what the Health app shows "Tracking..." and "Analyzing..." by. Once the
+ * morning's night is stored and the sampling is off (SKIN_SETTLE_MS after it stopped: the hub's last batch is in),
+ * the night's value, baseline and variation go to health.db skin_temp_night (once a morning, 05:00-20:00).
  */
 class HealthMonitor : public QObject
 {
@@ -72,6 +80,7 @@ public:
     static const int LIVE_AGE_MS = 5000;       // a reading younger than this is live, not from a batch
     static const int WORN_MS = 15 * 60 * 1000; // a heart rate this recent: the watch is on the wrist
     static const int HISTORY_HOURS = 6;        // minutes before today kept in memory
+    static const int SKIN_SETTLE_MS = 3000;    // after the skin temperature stopped: its last batch is in
 
     explicit HealthMonitor(QSettings *settings, NotificationPoster *poster, QObject *parent = nullptr);
     ~HealthMonitor() override;
@@ -94,6 +103,9 @@ public:
     void setWorkoutActive(bool active);
     // the off-body sensor's state (OffBodyPlugin): -1 unknown, 0 on the wrist, 1 off it
     void setOffBody(int state) { m_offBody = state; }
+    // the hub's skin temperature can be sampled (the logger has its plugin): the monitor decides when (M4 WO-13)
+    void setSkinTempAvailable(bool available);
+    bool skinTempSampling() const { return m_skinTempOn; }
     // the time of the next reminder minute, ms since the epoch; -1: none
     qint64 nextReminderMs() const;
 
@@ -109,10 +121,14 @@ signals:
     void goalReached(const QString &metric, int value, int goal);
     // auto-detected exercise: action "start", activity "walking" / "running" (the stop is the Exercise app's)
     void exerciseOffered(const QString &action, const QString &activity, qlonglong sinceMs);
+    // the hub's skin temperature should be sampled now (inside a night's sleep) or not
+    void skinTempSamplingChanged(bool on);
 
 private slots:
     void batchSettled();
     void importStep();
+    // the morning's skin temperature night, once its night is stored and the sampling is off
+    void checkSkinTemp();
 
 private:
     struct Settings {
@@ -130,6 +146,8 @@ private:
     uint post(HealthNotification n);
     void checkGoal();
     void checkSleep();
+    // the skin temperature sampling on or off by now
+    void updateSkinTemp();
     // the days before today that have data and no closed row in health.db: closed now
     void closeDays();
     bool dayTotals(const QDate &day, Health::DailyTotals *totals);
@@ -168,6 +186,10 @@ private:
     QScopedPointer<Health::HealthImport> m_import;
     bool m_holdingChanges = false; // the import's writes tell the readers once, at its end
     QDate m_closedThrough; // the days up to it are closed (or have no data)
+    bool m_skinTempAvailable = false;
+    bool m_skinTempOn = false;
+    qint64 m_skinTempOffMs = 0;
+    QDate m_skinTempDone; // the morning whose skin temperature night is in health.db
 };
 
 #endif // HEALTHMONITOR_H

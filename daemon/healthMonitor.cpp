@@ -248,10 +248,16 @@ void HealthMonitor::evaluate()
     for (const ExerciseOffer &offer : m_exercise.feed(m_series, t, m_config.exercise, m_workoutActive))
         postExercise(offer);
 
-    // 5. last night's sleep
+    // 5. the skin temperature, sampled inside a night's sleep only (M4 WO-13)
+    updateSkinTemp();
+
+    // 6. last night's sleep
     checkSleep();
 
-    // 6. the days that are over
+    // 7. last night's skin temperature, once the night is stored and the sampling is off
+    checkSkinTemp();
+
+    // 8. the days that are over
     closeDays();
 
     armReminderTimer();
@@ -423,6 +429,79 @@ void HealthMonitor::checkSleep()
         // the day's resting heart rate: once, over the 24 hours up to the night's end
         storeRestingHr(local.date(), night.main.endMs);
     }
+}
+
+void HealthMonitor::setSkinTempAvailable(bool available)
+{
+    m_skinTempAvailable = available;
+    // a mark left by a run that ended while it was sampling: not sampling now
+    if (m_store && m_store->meta(QStringLiteral("skin_temp.on_ms")).toLongLong() > 0) {
+        m_store->setMeta(QStringLiteral("skin_temp.on_ms"), 0LL);
+        m_store->setMeta(QStringLiteral("skin_temp.off_ms"), (qlonglong)now());
+    }
+}
+
+// The hub's skin temperature runs inside a night's sleep only (skinTempWanted); decided at every look, so it begins
+// with the first delivery that finds the wearer asleep and ends with the first that finds them up
+void HealthMonitor::updateSkinTemp()
+{
+    if (!m_skinTempAvailable)
+        return;
+    const qint64 t = now();
+    const bool want = skinTempWanted(m_skinTempOn, m_series, t, worn(t), effectiveRestingHr(m_profile, m_restingEstimate),
+                                     m_profile.maxHr());
+    if (want == m_skinTempOn)
+        return;
+    m_skinTempOn = want;
+    if (m_store) {
+        m_store->setMeta(QStringLiteral("skin_temp.on_ms"), want ? (qlonglong)t : 0LL);
+        if (!want)
+            m_store->setMeta(QStringLiteral("skin_temp.off_ms"), (qlonglong)t);
+    }
+    if (!want) {
+        m_skinTempOffMs = t;
+        // the hub's last batch comes within the plugin's settle time: the night is looked at after it
+        QTimer::singleShot(SKIN_SETTLE_MS, this, &HealthMonitor::checkSkinTemp);
+    }
+    qDebug() << "skin temperature:" << (want ? "sampling (asleep)" : "not sampling");
+    emit skinTempSamplingChanged(want);
+}
+
+// The morning's skin temperature (skinTemp.h): the main sleep stored, the sampling off and its last batch in; once a
+// morning (a row in skin_temp_night marks it done, also one without a value)
+void HealthMonitor::checkSkinTemp()
+{
+    if (!m_skinTempAvailable || !m_store || m_skinTempOn)
+        return;
+    const qint64 t = now();
+    if (m_skinTempOffMs > 0 && t >= m_skinTempOffMs && t - m_skinTempOffMs < SKIN_SETTLE_MS)
+        return;
+    const QDateTime local = QDateTime::fromMSecsSinceEpoch(t);
+    if (local.time().hour() < 5 || local.time().hour() >= 20)
+        return;
+    const QDate today = local.date();
+    if (m_skinTempDone == today)
+        return;
+    SleepNight night;
+    if (!HealthDb::readNight(m_store->path(), today, &night))
+        return; // not stored yet
+    const QList<SkinTempNight> nights =
+            HealthDb::readSkinTempNights(m_store->path(), today.addDays(-SKIN_BASELINE_DAYS), today);
+    for (const SkinTempNight &n : nights) {
+        if (n.wakeDate == today) {
+            m_skinTempDone = today;
+            return;
+        }
+    }
+    const QVector<QPair<qint64, double>> minutes =
+            HealthDb::readSkinTemp(m_store->path(), night.main.startMs, night.main.endMs);
+    const QList<QPointF> offBody =
+            loadStateRecords(QStringLiteral("offBody"), night.main.startMs, night.main.endMs);
+    const SkinTempNight n = skinTempNight(today, night.main, minutes, offBody, nights);
+    if (m_store->storeSkinTempNight(n))
+        m_skinTempDone = today;
+    qDebug() << "skin temperature: the night has" << n.minutes << "minutes," << (n.hasMean ? "a value" : "no value")
+             << "," << n.nights << "nights before it" << (n.hasVariation ? "(a variation)" : "");
 }
 
 qint64 HealthMonitor::nightEndOf(const QDate &wakeDate) const

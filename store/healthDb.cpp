@@ -33,7 +33,8 @@ struct Keyed {
     const char *table;
     const char *key;
 };
-const Keyed MUTABLE[] = {{"workout", "id"}, {"sleep_session", "id"}, {"daily", "date"}, {"eda_event", "id"}};
+const Keyed MUTABLE[] = {{"workout", "id"},     {"sleep_session", "id"}, {"daily", "date"}, {"eda_event", "id"},
+                          {"skin_temp_night", "wake_date"}};
 // the tables whose rows belong to a parent row: a change to them is a change of the parent
 struct Child {
     const char *table;
@@ -87,6 +88,14 @@ const char *const SCHEMA_V1[] = {
 const char *const SCHEMA_V2[] = {
     "CREATE TABLE IF NOT EXISTS workout_state (workout_id INTEGER PRIMARY KEY, saved_ms INTEGER NOT NULL, "
     "state TEXT NOT NULL)",
+};
+
+// version 3: the night's skin temperature (WO-13); a record with seq (its triggers come with seqTriggers())
+const char *const SCHEMA_V3[] = {
+    "CREATE TABLE IF NOT EXISTS skin_temp_night (wake_date TEXT PRIMARY KEY, start_ms INTEGER NOT NULL, "
+    "end_ms INTEGER NOT NULL, minutes INTEGER NOT NULL DEFAULT 0, mean_c REAL, nights INTEGER NOT NULL DEFAULT 0, "
+    "baseline_c REAL, dev_c REAL, lo_c REAL, hi_c REAL, seq INTEGER NOT NULL DEFAULT 0)",
+    "CREATE INDEX IF NOT EXISTS skin_temp_night_seq ON skin_temp_night (seq)",
 };
 
 // a snapshot is a few kB; anything far larger is not one
@@ -287,6 +296,28 @@ DailyRecord dailyFrom(const Stmt &q)
     return r;
 }
 
+const char *const SKIN_NIGHT_COLUMNS =
+    "wake_date, start_ms, end_ms, minutes, mean_c, nights, baseline_c, dev_c, lo_c, hi_c, seq";
+
+SkinTempNight skinNightFrom(const Stmt &q)
+{
+    SkinTempNight n;
+    n.wakeDate = QDate::fromString(q.s(0), Qt::ISODate);
+    n.startMs = q.i64(1);
+    n.endMs = q.i64(2);
+    n.minutes = q.i(3);
+    n.hasMean = !q.isNull(4);
+    n.meanC = q.d(4);
+    n.nights = q.i(5);
+    n.hasVariation = !q.isNull(7) && !q.isNull(8) && !q.isNull(9);
+    n.baselineC = q.d(6);
+    n.devC = q.d(7);
+    n.loC = q.d(8);
+    n.hiC = q.d(9);
+    n.seq = q.i64(10);
+    return n;
+}
+
 bool validType(const QString &type)
 {
     static const QRegularExpression re(QStringLiteral("^[A-Za-z0-9_-]{1,40}$"));
@@ -353,18 +384,25 @@ bool HealthDb::setUp()
     }
     if (version == SCHEMA_VERSION)
         return true;
-    // a new database (0): the schema in one transaction, then its version; one of version 1: what 2 adds
+    // a new database (0): the schema in one transaction, then its version; an older one: what the later versions add
     if (!exec("BEGIN IMMEDIATE"))
         return false;
     bool ok = true;
     if (version < 1) {
         for (const char *sql : SCHEMA_V1)
             ok = ok && exec(sql);
-        for (const QString &sql : seqTriggers())
-            ok = ok && exec(sql.toUtf8().constData());
     }
-    for (const char *sql : SCHEMA_V2)
-        ok = ok && exec(sql);
+    if (version < 2) {
+        for (const char *sql : SCHEMA_V2)
+            ok = ok && exec(sql);
+    }
+    if (version < 3) {
+        for (const char *sql : SCHEMA_V3)
+            ok = ok && exec(sql);
+    }
+    // the triggers of every table that has seq (IF NOT EXISTS: those there already stay)
+    for (const QString &sql : seqTriggers())
+        ok = ok && exec(sql.toUtf8().constData());
     ok = ok && exec(QByteArray("PRAGMA user_version=" + QByteArray::number(SCHEMA_VERSION)).constData());
     if (ok && exec("COMMIT"))
         return true;
@@ -804,6 +842,70 @@ bool HealthDb::setDailyRestingHr(const QDate &date, int bpm)
     return commit(before);
 }
 
+bool HealthDb::addSkinTemp(const QVector<QPair<qint64, double>> &minutes)
+{
+    if (minutes.isEmpty())
+        return true;
+    const qint64 before = seq();
+    if (!begin())
+        return false;
+    Stmt q(m_db, "INSERT OR IGNORE INTO skin_temp (t_ms, c) VALUES (?, ?)");
+    for (const QPair<qint64, double> &m : minutes) {
+        q.reset();
+        q.bind(1, m.first).bind(2, m.second);
+        if (!q.ok() || !q.run()) {
+            rollback(true);
+            return false;
+        }
+    }
+    return commit(before);
+}
+
+bool HealthDb::storeSkinTempNight(const SkinTempNight &n)
+{
+    if (!n.wakeDate.isValid())
+        return false;
+    const QString date = n.wakeDate.toString(Qt::ISODate);
+    const qint64 before = seq();
+    if (!begin())
+        return false;
+    Stmt q(m_db, "INSERT INTO skin_temp_night (wake_date, start_ms, end_ms, minutes, mean_c, nights, baseline_c, dev_c, "
+                 "lo_c, hi_c) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (wake_date) DO UPDATE SET "
+                 "start_ms = excluded.start_ms, end_ms = excluded.end_ms, minutes = excluded.minutes, "
+                 "mean_c = excluded.mean_c, nights = excluded.nights, baseline_c = excluded.baseline_c, "
+                 "dev_c = excluded.dev_c, lo_c = excluded.lo_c, hi_c = excluded.hi_c "
+                 "WHERE start_ms IS NOT excluded.start_ms OR end_ms IS NOT excluded.end_ms "
+                 "OR minutes IS NOT excluded.minutes OR mean_c IS NOT excluded.mean_c OR nights IS NOT excluded.nights "
+                 "OR baseline_c IS NOT excluded.baseline_c OR dev_c IS NOT excluded.dev_c OR lo_c IS NOT excluded.lo_c "
+                 "OR hi_c IS NOT excluded.hi_c");
+    q.bind(1, date).bind(2, n.startMs).bind(3, n.endMs).bind(4, qMax(0, n.minutes)).bind(6, qMax(0, n.nights));
+    if (n.hasMean)
+        q.bind(5, n.meanC);
+    else
+        q.bindNull(5);
+    if (n.hasVariation)
+        q.bind(7, n.baselineC).bind(8, n.devC).bind(9, n.loC).bind(10, n.hiC);
+    else
+        q.bindNull(7).bindNull(8).bindNull(9).bindNull(10);
+    bool ok = q.ok() && q.run();
+    // the day's row has the morning's variation (none: a row is not made for it)
+    if (ok && n.hasVariation) {
+        Stmt d(m_db, "INSERT INTO daily (date, temp_dev_c) VALUES (?, ?) ON CONFLICT (date) DO UPDATE SET "
+                     "temp_dev_c = excluded.temp_dev_c WHERE temp_dev_c IS NOT excluded.temp_dev_c");
+        d.bind(1, date).bind(2, n.devC);
+        ok = d.ok() && d.run();
+    } else if (ok) {
+        Stmt d(m_db, "UPDATE daily SET temp_dev_c = NULL WHERE date = ? AND temp_dev_c IS NOT NULL");
+        d.bind(1, date);
+        ok = d.ok() && d.run();
+    }
+    if (!ok) {
+        rollback(true);
+        return false;
+    }
+    return commit(before);
+}
+
 QDate HealthDb::lastClosedDay()
 {
     if (!open())
@@ -856,6 +958,11 @@ QVariantMap HealthDb::readCounts(const QString &path)
         {"days", "SELECT COUNT(*) FROM daily"},
         {"daysClosed", "SELECT COUNT(*) FROM daily WHERE closed_ms IS NOT NULL"},
         {"daysResting", "SELECT COUNT(*) FROM daily WHERE resting_hr IS NOT NULL"},
+        {"skinTempMinutes", "SELECT COUNT(*) FROM skin_temp"},
+        {"skinTempNights", "SELECT COUNT(*) FROM skin_temp_night"},
+        {"skinTempValues", "SELECT COUNT(*) FROM skin_temp_night WHERE mean_c IS NOT NULL"},
+        {"skinTempVariations", "SELECT COUNT(*) FROM skin_temp_night WHERE dev_c IS NOT NULL"},
+        {"daysTempDev", "SELECT COUNT(*) FROM daily WHERE temp_dev_c IS NOT NULL"},
         {"import.sleep", "SELECT value FROM meta WHERE key = 'import.sleep'"},
         {"import.exercise", "SELECT value FROM meta WHERE key = 'import.exercise'"},
         {"import.resting", "SELECT value FROM meta WHERE key = 'import.resting'"},
@@ -1036,6 +1143,30 @@ QList<DailyRecord> HealthDb::readDailyRange(const QString &path, const QDate &fr
     q.bind(1, from.toString(Qt::ISODate)).bind(2, to.toString(Qt::ISODate));
     while (q.ok() && q.row())
         out.append(dailyFrom(q));
+    return out;
+}
+
+QVector<QPair<qint64, double>> HealthDb::readSkinTemp(const QString &path, qint64 fromMs, qint64 toMs)
+{
+    QVector<QPair<qint64, double>> out;
+    ReadConn c(path);
+    Stmt q(c.db(), "SELECT t_ms, c FROM skin_temp WHERE t_ms >= ? AND t_ms < ? ORDER BY t_ms");
+    q.bind(1, fromMs).bind(2, toMs);
+    while (q.ok() && q.row())
+        out.append(qMakePair(q.i64(0), q.d(1)));
+    return out;
+}
+
+QList<SkinTempNight> HealthDb::readSkinTempNights(const QString &path, const QDate &from, const QDate &to)
+{
+    QList<SkinTempNight> out;
+    ReadConn c(path);
+    const QByteArray sql = QByteArray("SELECT ") + SKIN_NIGHT_COLUMNS +
+                           " FROM skin_temp_night WHERE wake_date >= ? AND wake_date <= ? ORDER BY wake_date";
+    Stmt q(c.db(), sql.constData());
+    q.bind(1, from.toString(Qt::ISODate)).bind(2, to.toString(Qt::ISODate));
+    while (q.ok() && q.row())
+        out.append(skinNightFrom(q));
     return out;
 }
 

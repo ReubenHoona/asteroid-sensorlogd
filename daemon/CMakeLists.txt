@@ -15,6 +15,8 @@ add_executable(
     sensorPlugins/activityStreams.h
     sensorPlugins/offBody.cpp
     sensorPlugins/offBody.h
+    sensorPlugins/skinTempSensor.cpp
+    sensorPlugins/skinTempSensor.h
     sensorPlugins/sampleTime.h
     healthMonitor.cpp
     healthMonitor.h

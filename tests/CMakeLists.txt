@@ -47,6 +47,7 @@ add_library(sensorlogd-undertest STATIC
     ${top}/daemon/sensorPlugins/barometerSensor.cpp ${top}/daemon/sensorPlugins/barometerSensor.h
     ${top}/daemon/sensorPlugins/activityStreams.cpp ${top}/daemon/sensorPlugins/activityStreams.h
     ${top}/daemon/sensorPlugins/offBody.cpp ${top}/daemon/sensorPlugins/offBody.h
+    ${top}/daemon/sensorPlugins/skinTempSensor.cpp ${top}/daemon/sensorPlugins/skinTempSensor.h
     ${top}/qmlplugin/stepsDataLoader.cpp ${top}/qmlplugin/stepsDataLoader.h
     ${top}/qmlplugin/hrDataLoader.cpp ${top}/qmlplugin/hrDataLoader.h
     ${top}/qmlplugin/weightDataLoader.cpp ${top}/qmlplugin/weightDataLoader.h
@@ -65,6 +66,7 @@ add_library(sensorlogd-undertest STATIC
     ${top}/metrics/autoExercise.cpp ${top}/metrics/autoExercise.h
     ${top}/metrics/healthData.cpp ${top}/metrics/healthData.h
     ${top}/metrics/restingHr.cpp ${top}/metrics/restingHr.h
+    ${top}/metrics/skinTemp.cpp ${top}/metrics/skinTemp.h
     ${top}/store/healthDb.cpp ${top}/store/healthDb.h
     ${top}/store/healthImport.cpp ${top}/store/healthImport.h
 )
@@ -79,9 +81,10 @@ endif()
 # tst_store the health database and its one-time import, tst_api the daemon's D-Bus methods for it, tst_activity
 # the hub's motion and cadence streams (WO-05), tst_workouthub the workout latency asked of the hub (WO-08),
 # tst_offbody the hub's off-body state, the monitor's worn() and what is left out off the wrist (WO-03), tst_sleep
-# the sleep estimate of version 2 on invented nights, its timeline in health.db and the day's naps (WO-06).
+# the sleep estimate of version 2 on invented nights, its timeline in health.db and the day's naps (WO-06),
+# tst_skintemp the skin temperature: the hub's readings, when they are taken, the night's value and variation (WO-13).
 foreach(name common heartrate barometer dataloaders health monitor healthloaders store api activity workouthub offbody
-        sleep)
+        sleep skintemp)
     add_executable(tst_${name} tst_${name}.cpp testenv.h peek.h)
     target_link_libraries(tst_${name} PRIVATE sensorlogd-undertest)
     if(SENSORLOGD_JUNIT_DIR)

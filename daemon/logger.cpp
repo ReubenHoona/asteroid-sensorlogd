@@ -80,6 +80,8 @@ void Logger::sensorfwRegistered() {
             m_activity->subscribe();
         if (m_offBody)
             m_offBody->query();
+        if (m_skinTemp)
+            m_skinTemp->resubscribe();
         if (m_hubWorkout)
             sendHubWorkout();
         return;
@@ -101,6 +103,8 @@ void Logger::deletePlugins() {
     m_activity = nullptr;
     delete m_offBody;
     m_offBody = nullptr;
+    delete m_skinTemp;
+    m_skinTemp = nullptr;
 }
 
 void Logger::setup() {
@@ -115,6 +119,7 @@ void Logger::setup() {
     barometerEnabled = this->settings->value("barometer/enabled",true).toBool();
     const bool activityEnabled = this->settings->value("activity/enabled", true).toBool();
     const bool offBodyEnabled = this->settings->value("offBody/enabled", true).toBool();
+    const bool skinTempEnabled = this->settings->value("skinTemp/enabled", true).toBool();
 
     // heart rate: one record per interval at rest (Wear OS-like, 5-10 min)
     if (heartrateSensorEnabled) {
@@ -137,6 +142,10 @@ void Logger::setup() {
     if (offBodyEnabled)
         m_offBody = new OffBodyPlugin(this);
 
+    // the skin temperature (M4 WO-13): sampled inside a night's sleep, when the Health monitor says
+    if (skinTempEnabled)
+        m_skinTemp = new SkinTempPlugin(m_store, this);
+
     m_health = new HealthMonitor(settings, &m_poster, this);
     m_health->setStore(m_store);
     m_health->attach(m_stepCounter, m_heartrateSensor);
@@ -145,6 +154,10 @@ void Logger::setup() {
     if (m_offBody) {
         m_health->setOffBody(m_offBody->state());
         connect(m_offBody, &OffBodyPlugin::changed, m_health, &HealthMonitor::setOffBody);
+    }
+    if (m_skinTemp) {
+        m_health->setSkinTempAvailable(true);
+        connect(m_health, &HealthMonitor::skinTempSamplingChanged, m_skinTemp, &SkinTempPlugin::setWanted);
     }
     m_health->start();
 

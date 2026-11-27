@@ -27,6 +27,7 @@
 #include "sensorPlugins/barometerSensor.h"
 #include "sensorPlugins/activityStreams.h"
 #include "sensorPlugins/offBody.h"
+#include "sensorPlugins/skinTempSensor.h"
 #include "healthMonitor.h"
 #include "healthNotifier.h"
 #include "../store/healthDb.h"
@@ -62,6 +63,11 @@
  * The wrist comes from the hub's off-body sensor (offBody.h, M4 WO-03): its
  * changes in offBody/, the Health monitor's "worn" from it. Settings:
  * offBody/enabled (true).
+ *
+ * The hub's skin temperature (skinTemp.h, M4 WO-13) is sampled only inside a
+ * night's sleep: the Health monitor says when, the plugin subscribes to it on
+ * sensorfwd's hub connection then and writes health.db skin_temp. Settings:
+ * skinTemp/enabled (true).
  */
 class Logger : public QObject, protected QDBusContext
 {
@@ -134,6 +140,7 @@ private:
     BarometerSensorPlugin *m_barometerSensor = nullptr;
     ActivityStreamsPlugin *m_activity = nullptr;
     OffBodyPlugin *m_offBody = nullptr;
+    SkinTempPlugin *m_skinTemp = nullptr;
     // M4 WO-08: the app that runs the workout (its session bus name) and the hub's workout mode as asked
     void noteWorkoutClient();
     void updateHubWorkout();

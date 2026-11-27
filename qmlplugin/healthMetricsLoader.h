@@ -29,6 +29,10 @@
  *   daily(date):   the day's row in health.db, as the daemon closed it after midnight (store/healthDb.h):
  *                  { date, restingHr, closed, steps, kcal, distanceM, floors, azm, hoursMet, closedMs, seq }; {}
  *                  if the day has none
+ *   skinTemp(date): the morning's skin temperature variation as stock's card shows it (metrics/skinTemp.h):
+ *                  { state: noData, calibrating, tracking, analyzing, inRange, aboveRange, belowRange; nightsLeft;
+ *                  wakeDate; measured; minutes; hasVariation; devC, loC, hiC (deg C); nights }
+ *   skinTempWeek(date): the seven mornings up to it, the oldest first: { date, hasVariation, devC, loC, hiC, state }
  *
  * dataChanged: a step day file changed, or the daemon wrote to health.db (its D-Bus signal HealthChanged).
  */
@@ -74,6 +78,9 @@ public:
 
     // the day's row in health.db ({} if none)
     Q_INVOKABLE QVariantMap daily(QDate date);
+    // the skin temperature variation of a morning (M4 WO-13) and of the seven mornings up to it
+    Q_INVOKABLE QVariantMap skinTemp(QDate date);
+    Q_INVOKABLE QVariantList skinTempWeek(QDate date);
 
     // The energy formula of the Health numbers (metrics/healthMetrics.h), for the Exercise app's workouts: the
     // energy of a time is restingKcal(its length) plus minuteKcal() of each of its minutes (energyKcal())

@@ -198,13 +198,14 @@ private slots:
         QCOMPARE(sqlNumber(path(), "PRAGMA user_version"), qint64(HealthDb::SCHEMA_VERSION));
         QCOMPARE(sqlText(path(), "PRAGMA journal_mode"), QString("wal"));
         for (const char *table : {"meta", "workout", "workout_track", "workout_lap", "workout_pause", "workout_state",
-                                  "sleep_session", "sleep_stage", "daily", "spo2", "hrv", "skin_temp", "eda_event"}) {
+                                  "sleep_session", "sleep_stage", "daily", "spo2", "hrv", "skin_temp", "eda_event",
+                                  "skin_temp_night"}) {
             const QByteArray q = QByteArray("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '")
                     + table + "'";
             QVERIFY2(sqlNumber(path(), q.constData()) == 1, table);
         }
         const qint64 triggers = sqlNumber(path(), "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'");
-        QCOMPARE(triggers, qint64(4 * 2 + 4 * 3));
+        QCOMPARE(triggers, qint64(5 * 2 + 4 * 3));
         // opened again: nothing is made twice
         const QString before = sqlText(path(), "SELECT group_concat(name) FROM sqlite_master");
         { HealthDb again(path()); QVERIFY(again.isOpen()); }
@@ -216,12 +217,12 @@ private slots:
         { HealthDb db(path()); QVERIFY(db.beginWorkout(ms(MON, 8), "walk") > 0); }
         sqlite3 *raw = nullptr;
         QCOMPARE(sqlite3_open(QFile::encodeName(path()).constData(), &raw), SQLITE_OK);
-        QCOMPARE(sqlite3_exec(raw, "PRAGMA user_version=3", nullptr, nullptr, nullptr), SQLITE_OK);
+        QCOMPARE(sqlite3_exec(raw, "PRAGMA user_version=4", nullptr, nullptr, nullptr), SQLITE_OK);
         sqlite3_close(raw);
-        QTest::ignoreMessage(QtWarningMsg, QRegularExpression("has schema 3"));
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression("has schema 4"));
         HealthDb db(path());
         QVERIFY(db.isOpen());
-        QCOMPARE(sqlNumber(path(), "PRAGMA user_version"), qint64(3));
+        QCOMPARE(sqlNumber(path(), "PRAGMA user_version"), qint64(4));
         QVERIFY(db.beginWorkout(ms(MON, 9), "run") > 0); // still written
     }
 
@@ -838,10 +839,11 @@ private slots:
             QVERIFY(db.beginWorkout(ms(MON, 8, 0), "Run") > 0);
             seq = db.seq();
         }
-        // as WO-01 made it: no workout_state, version 1
+        // as WO-01 made it: no workout_state, no skin_temp_night, version 1
         sqlite3 *raw = nullptr;
         QCOMPARE(sqlite3_open(QFile::encodeName(path()).constData(), &raw), SQLITE_OK);
-        QCOMPARE(sqlite3_exec(raw, "DROP TABLE workout_state; PRAGMA user_version=1", nullptr, nullptr, nullptr), SQLITE_OK);
+        QCOMPARE(sqlite3_exec(raw, "DROP TABLE workout_state; DROP TABLE skin_temp_night; PRAGMA user_version=1", nullptr,
+                              nullptr, nullptr), SQLITE_OK);
         sqlite3_close(raw);
         QCOMPARE(sqlNumber(path(), "PRAGMA user_version"), qint64(1));
         // a reader of the old version finds no snapshot, and no error
@@ -849,9 +851,10 @@ private slots:
         QVERIFY(!HealthDb::readOpenWorkout(path(), ms(MON, 12, 0), &w));
         HealthDb db(path());
         QVERIFY(db.isOpen());
-        QCOMPARE(sqlNumber(path(), "PRAGMA user_version"), qint64(2));
+        QCOMPARE(sqlNumber(path(), "PRAGMA user_version"), qint64(3));
         QCOMPARE(sqlNumber(path(), "SELECT COUNT(*) FROM sqlite_master WHERE name = 'workout_state'"), qint64(1));
-        QCOMPARE(sqlNumber(path(), "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'"), qint64(4 * 2 + 4 * 3));
+        QCOMPARE(sqlNumber(path(), "SELECT COUNT(*) FROM sqlite_master WHERE name = 'skin_temp_night'"), qint64(1));
+        QCOMPARE(sqlNumber(path(), "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'"), qint64(5 * 2 + 4 * 3));
         QCOMPARE(db.seq(), seq);
         QCOMPARE(HealthDb::readWorkouts(path(), 0, ms(MON.addDays(1), 0)).size(), 2);
         QVERIFY(HealthDb::readOpenWorkout(path(), ms(MON, 12, 0), &w));

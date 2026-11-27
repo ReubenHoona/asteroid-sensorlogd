@@ -20,6 +20,7 @@
 #include <QVariantMap>
 #include <QVector>
 
+#include "../metrics/skinTemp.h"
 #include "../metrics/sleepEstimator.h"
 
 struct sqlite3;
@@ -33,7 +34,7 @@ namespace Health {
  * Room databases with one owner (passive_stats.db: ExerciseSummary, ExerciseGps, ExerciseSplitAnnotation,
  * LocalSleepPeriods, ...); here the owner, and the only writer, is sensorlogd. Everybody else reads.
  *
- * Schema (PRAGMA user_version 2; README.md has the columns):
+ * Schema (PRAGMA user_version 3; README.md has the columns):
  *   meta          key/value: 'seq' (the change counter), 'import.<phase>' (the one-time import, healthImport.h)
  *   workout       one row a workout: start_ms (unique), end_ms (NULL while it is on), active_s, type, distance_m,
  *                 kcal, steps, avg_bpm, max_bpm, light_s, moderate_s, vigorous_s, peak_s, azm, elev_gain_m,
@@ -50,9 +51,16 @@ namespace Health {
  *   sleep_stage   (session_id, start_ms, end_ms, stage: 0 awake, 1 light, 2 deep, 3 rem)
  *   daily         one row a local day: date (ISO), resting_hr, hrv_rmssd, resp_rate, temp_dev_c, steps, kcal,
  *                 distance_m, floors, azm, hours_met, cardio_load, readiness, closed_ms, seq
- *   spo2, hrv, skin_temp, eda_event   for the hub streams of later work orders (no writer yet)
+ *   skin_temp     (t_ms, c): the hub's skin temperature, a row a minute (its start; the mean in deg C), taken only
+ *                 inside a night's sleep (M4 WO-13); a sample table: no seq
+ *   skin_temp_night  version 3 (M4 WO-13): one row a morning (wake_date) once its night is through: the main
+ *                 sleep (start_ms, end_ms), minutes (asleep, worn, with a reading), mean_c (NULL: too few), nights
+ *                 (with a value before it in the baseline's 30 days), baseline_c, dev_c (the variation), lo_c, hi_c
+ *                 (the personal range of dev_c; NULL: no baseline yet), seq; daily.temp_dev_c gets the variation
+ *   spo2, hrv, eda_event   for the hub streams of later work orders (no writer yet)
  *
- * The change sequence: meta 'seq' counts every change. A row of workout, sleep_session, daily and eda_event
+ * The change sequence: meta 'seq' counts every change. A row of workout, sleep_session, daily, eda_event and
+ * skin_temp_night
  * takes the next value in `seq` when it is inserted or updated (triggers, so no write can forget it), and a
  * change to a workout's track, laps or pauses, or to a session's stages, gives its parent the next one. Rows are
  * never deleted: `deleted` = 1 is the tombstone. A reader that has seen everything up to seq N asks for
@@ -136,7 +144,7 @@ struct ChangePage {
 class HealthDb
 {
 public:
-    static const int SCHEMA_VERSION = 2;
+    static const int SCHEMA_VERSION = 3;
 
     // The writer (sensorlogd): opens or makes the database and its schema
     explicit HealthDb(const QString &path);
@@ -189,13 +197,21 @@ public:
     // the latest day with closed totals (invalid: none)
     QDate lastClosedDay();
 
+    // ---- skin temperature (M4 WO-13) ----
+    // the minute rows (start ms, deg C); a minute that has one keeps it. seq does not change (a sample table).
+    bool addSkinTemp(const QVector<QPair<qint64, double>> &minutes);
+    // the night of a morning (replaced if there is one), and its variation in daily.temp_dev_c
+    bool storeSkinTempNight(const SkinTempNight &night);
+
     // ---- readers: a connection of their own, read only (a database that is not there gives nothing) ----
     static qint64 readSeq(const QString &path);
     static QVariant readMeta(const QString &path, const QString &key);
     // How many rows of each kind, no values (for checks on the watch): schema, seq, workouts, workoutsDeleted,
     // workoutsImported, workoutsOpen, trackPoints, laps, pauses, nights, sleepSessions, sleepImported, naps, nightsV2
     // (the estimate of version 2), sleepStages (the stage spans of the sessions in force), days, daysClosed,
-    // daysResting, and import.sleep, import.exercise, import.resting, import.daily (1: done). {} without a database.
+    // daysResting, skinTempMinutes, skinTempNights (the mornings done), skinTempValues (with a mean),
+    // skinTempVariations, daysTempDev, and import.sleep, import.exercise, import.resting, import.daily (1: done). {}
+    // without a database.
     static QVariantMap readCounts(const QString &path);
     // the workouts that began in [fromMs, toMs), newest first (deleted ones left out)
     static QList<WorkoutRecord> readWorkouts(const QString &path, qint64 fromMs, qint64 toMs, int limit = -1);
@@ -211,6 +227,10 @@ public:
     static bool readNight(const QString &path, const QDate &wakeDate, SleepNight *night);
     static bool readDaily(const QString &path, const QDate &date, DailyRecord *record);
     static QList<DailyRecord> readDailyRange(const QString &path, const QDate &from, const QDate &to);
+    // the skin temperature's minute rows in [fromMs, toMs), in time order
+    static QVector<QPair<qint64, double>> readSkinTemp(const QString &path, qint64 fromMs, qint64 toMs);
+    // the skin temperature nights of the mornings from .. to, in date order (none on a database before version 3)
+    static QList<SkinTempNight> readSkinTempNights(const QString &path, const QDate &from, const QDate &to);
     // The rows of a table (workout, sleep_session, daily, eda_event) changed after sinceSeq, in seq order, at
     // most max, tombstones included: what a sync asks for (asteroid-btsyncd reads the same with its own SQL)
     static ChangePage changes(const QString &path, const QString &table, qint64 sinceSeq, int max = 1000);

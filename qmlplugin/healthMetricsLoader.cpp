@@ -19,6 +19,7 @@
 #include "../metrics/healthData.h"
 #include "../metrics/healthMetrics.h"
 #include "../metrics/hrAlerts.h"
+#include "../metrics/skinTemp.h"
 #include "../store/healthDb.h"
 
 using namespace Health;
@@ -155,6 +156,37 @@ QVariantMap HealthMetricsLoader::daily(QDate date)
 {
     DailyRecord r;
     return HealthDb::readDaily(healthDbPath(), date, &r) ? r.toMap() : QVariantMap();
+}
+
+QVariantMap HealthMetricsLoader::skinTemp(QDate date)
+{
+    const QString db = healthDbPath();
+    const QList<SkinTempNight> nights = HealthDb::readSkinTempNights(db, date.addDays(-SKIN_BASELINE_DAYS), date);
+    const qint64 on = HealthDb::readMeta(db, QStringLiteral("skin_temp.on_ms")).toLongLong();
+    const qint64 off = HealthDb::readMeta(db, QStringLiteral("skin_temp.off_ms")).toLongLong();
+    return skinTempView(date, nights, on, off, QDateTime::currentMSecsSinceEpoch()).toMap();
+}
+
+QVariantList HealthMetricsLoader::skinTempWeek(QDate date)
+{
+    const QList<SkinTempNight> nights = HealthDb::readSkinTempNights(healthDbPath(), date.addDays(-6), date);
+    QVariantList out;
+    for (int i = 6; i >= 0; i--) {
+        const QDate d = date.addDays(-i);
+        QVariantMap m{{"date", d}, {"hasVariation", false}, {"devC", 0.0}, {"loC", 0.0}, {"hiC", 0.0},
+                      {"state", QString()}};
+        for (const SkinTempNight &n : nights) {
+            if (n.wakeDate != d || !n.hasVariation)
+                continue;
+            m["hasVariation"] = true;
+            m["devC"] = n.devC;
+            m["loC"] = n.loC;
+            m["hiC"] = n.hiC;
+            m["state"] = skinTempStateName(n.devC > n.hiC ? SkinAboveRange : n.devC < n.loC ? SkinBelowRange : SkinInRange);
+        }
+        out << m;
+    }
+    return out;
 }
 
 void HealthMetricsLoader::takeEnergyContext()
