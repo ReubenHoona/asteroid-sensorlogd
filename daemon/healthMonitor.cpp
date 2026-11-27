@@ -8,6 +8,7 @@
  */
 
 #include <algorithm>
+#include <cmath>
 
 #include <QDateTime>
 #include <QDebug>
@@ -25,9 +26,8 @@
 
 using namespace Health;
 
-static const char *const GOAL_KEY = "/org/asteroidos/ux/steps-goal";
 static const char *const TWELVE_HOUR_KEY = "/org/asteroidos/settings/use-12h-format";
-static const int DEFAULT_STEPS_GOAL = 10000;
+static const int GOAL_CHECK_MS = 10 * 60 * 1000; // a goal of another type than steps: its day summary at most this often
 static const int PROFILE_CACHE_MS = 10 * 60 * 1000;
 static const int SLEEP_RETRY_MS = 30 * 60 * 1000;
 static const int SLEEP_QUIET_MS = 30 * 60 * 1000; // awake this long: the night is over
@@ -41,7 +41,8 @@ static QString json(const QJsonObject &o)
 HealthMonitor::HealthMonitor(QSettings *settings, NotificationPoster *poster, QObject *parent)
     : QObject(parent), m_settings(settings), m_poster(poster)
 {
-    m_goalItem = new MDConfItem(GOAL_KEY, this);
+    for (const QString &key : mainGoalKeys())
+        m_goalItems << new MDConfItem(key, this);
     m_twelveHourItem = new MDConfItem(TWELVE_HOUR_KEY, this);
     m_settle = new QTimer(this);
     m_settle->setSingleShot(true);
@@ -167,6 +168,8 @@ void HealthMonitor::setWorkoutActive(bool active)
     m_workoutActive = active;
     // no heart rate checks of the monitor's own during a workout (its latency is 10 s, WO-08); again after it
     armReminderTimer();
+    if (!active)
+        releaseCelebrations();
 }
 
 void HealthMonitor::batchSettled()
@@ -388,8 +391,33 @@ uint HealthMonitor::post(HealthNotification n)
     n.hints.insert("x-nemo-preview-summary", n.summary);
     if (!n.body.isEmpty())
         n.hints.insert("x-nemo-preview-body", n.body);
-    n.hints.insert("x-nemo-feedback", QStringLiteral("notif_strong"));
+    // the vibration, unless the post has its own (a goal's: none, the launcher's screen vibrates)
+    if (!n.hints.contains("x-nemo-feedback"))
+        n.hints.insert("x-nemo-feedback", QStringLiteral("notif_strong"));
     return m_poster->post(n);
+}
+
+void HealthMonitor::postCelebration(const HealthNotification &n)
+{
+    if (m_workoutActive) {
+        m_held.append({n, now()});
+        return;
+    }
+    post(n);
+}
+
+// The workout is over: what it held, in order; a reminder to move for an hour that is over by now says nothing
+void HealthMonitor::releaseCelebrations()
+{
+    const QList<HeldCelebration> held = m_held;
+    m_held.clear();
+    const qint64 hour = MinuteSeries::minuteOf(now()) / 60;
+    for (const HeldCelebration &h : held) {
+        const QJsonObject j = QJsonDocument::fromJson(h.notification.hints.value("x-asteroid-health").toString().toUtf8()).object();
+        if (j.value("type").toString() == QLatin1String("reminder-to-move") && MinuteSeries::minuteOf(h.atMs) / 60 != hour)
+            continue;
+        post(h.notification);
+    }
 }
 
 // stock's texts: stock/STRINGS.tsv 0x7f14034c/d (titles), 0x7f1409a0 (N bpm), 0x7f1409a1 / 0x7f1409a3 (detail)
@@ -413,6 +441,11 @@ void HealthMonitor::postAlert(const HrAlert &alert)
 }
 
 // stock/STRINGS.tsv 0x7f140199 (Reminder to move), plural 0x7f12000a, 0x7f140193 (Goal complete!), 0x7f140196
+// (Hourly Activity), 0x7f140197 (%1$s hr). The launcher draws them full screen from x-asteroid-health (E-06); the
+// title and text are stock's notification of a celebration (trj.java:166-176: the label as the title if there is
+// one, else the title; the text the title, a new line and the value): HourlyReminderToMoveMessage "Reminder to move"
+// / "N steps left\nthis hour", HourlyReminderToMoveCelebration "Reminder to move" / "Goal complete!\n250/250"
+// (its b(): current/max), DailyReminderToMoveCelebration "Hourly Activity" / "Goal complete!\n9 hr"
 void HealthMonitor::postMove(const MoveEvent &event)
 {
     HealthNotification n;
@@ -429,17 +462,60 @@ void HealthMonitor::postMove(const MoveEvent &event)
         break;
     case MoveEvent::HourComplete:
         n.summary = QStringLiteral("Reminder to move");
-        n.body = QStringLiteral("Goal complete!");
+        n.body = QStringLiteral("Goal complete!\n%1/%1").arg(HOURLY_STEPS);
         n.hints.insert("x-asteroid-health", json({{"type", "reminder-to-move-complete"}, {"steps", event.steps},
                                                   {"goal", HOURLY_STEPS}}));
         break;
     case MoveEvent::DayComplete:
         n.summary = QStringLiteral("Hourly Activity");
-        n.body = QStringLiteral("%1 hr").arg(event.hoursMet);
+        n.body = QStringLiteral("Goal complete!\n%1 hr").arg(event.hoursMet);
         n.hints.insert("x-asteroid-health", json({{"type", "hourly-activity"}, {"hours", event.hoursMet}}));
+        // a goal achieved: the launcher's screen vibrates (twice), the post does not
+        n.hints.insert("x-nemo-feedback", QString());
         break;
     }
-    post(n);
+    postCelebration(n);
+}
+
+// The main goal reached (stock's GoalAchievedCelebration of its type, tui.java:505-580): the names 0x7f14019a Steps,
+// 0x7f140188 Calories, 0x7f14018a Distance, 0x7f140191 Floors, 0x7f140186 Active Zone Min; the values "%1$s cal"
+// 0x7f140187, "%1$s floors" 0x7f140190, "%1$s Zone Mins" 0x7f140185, the distance in km (the launcher writes it in
+// the locale's unit). The title and text as stock's notification of it (trj.java:166-176): "Steps" /
+// "Goal complete!\n10,000". No vibration of the post's: the launcher's screen vibrates.
+void HealthMonitor::postGoal(const MainGoal &goal, double value)
+{
+    HealthNotification n;
+    QString valueText;
+    switch (goal.type) {
+    case GoalType::Steps:
+        n.summary = QStringLiteral("Steps");
+        valueText = QLocale::c().toString((int)std::lround(value));
+        break;
+    case GoalType::Calories:
+        n.summary = QStringLiteral("Calories");
+        valueText = QStringLiteral("%1 cal").arg(QLocale::c().toString((int)std::lround(value)));
+        break;
+    case GoalType::Distance:
+        n.summary = QStringLiteral("Distance");
+        valueText = QStringLiteral("%1 km").arg(QLocale::c().toString(value / 1000.0, 'f', 2));
+        break;
+    case GoalType::Floors:
+        n.summary = QStringLiteral("Floors");
+        valueText = QStringLiteral("%1 floors").arg((int)std::lround(value));
+        break;
+    case GoalType::Azm:
+        n.summary = QStringLiteral("Active Zone Min");
+        valueText = QStringLiteral("%1 Zone Mins").arg((int)std::lround(value));
+        break;
+    }
+    n.body = QStringLiteral("Goal complete!\n%1").arg(valueText);
+    n.icon = QStringLiteral("ios-trophy");
+    n.hints.insert("x-asteroid-category", QStringLiteral("celebration"));
+    n.hints.insert("transient", true);
+    n.hints.insert("x-nemo-feedback", QString());
+    n.hints.insert("x-asteroid-health", json({{"type", "goal"}, {"metric", goal.metric()},
+                                              {"value", std::round(value * 100) / 100}, {"goal", goal.target}}));
+    postCelebration(n);
 }
 
 // stock/STRINGS.tsv 0x7f140059 / 0x7f140057 (detected, Start tracking?); the brand in the first one is ours.
@@ -458,18 +534,40 @@ void HealthMonitor::postExercise(const ExerciseOffer &offer)
     emit exerciseOffered(QStringLiteral("start"), offer.activity, offer.sinceMs);
 }
 
+MainGoal HealthMonitor::mainGoal() const
+{
+    QVariantList values;
+    for (MDConfItem *item : m_goalItems)
+        values << item->value();
+    return mainGoalFrom(values);
+}
+
+// The main goal reached (R5 E-05 / E-18): once a day, of the type the phone set (stock: the account's primary goal,
+// its passive goal of the hub, PrimaryGoalReceiver -> tui.java j()). Steps from the minutes in memory; another type
+// from the day's summary (the day files and the heart rate database), at most every GOAL_CHECK_MS and at the
+// monitor's own wake
 void HealthMonitor::checkGoal()
 {
-    const QDate today = QDateTime::fromMSecsSinceEpoch(now()).date();
+    const qint64 t = now();
+    const QDate today = QDateTime::fromMSecsSinceEpoch(t).date();
     if (m_settings->value("HealthPrivate/goalDay", -1).toLongLong() == today.toJulianDay())
         return;
-    const int goal = qMax(1, m_goalItem->value(DEFAULT_STEPS_GOAL).toInt());
-    const qint64 midnight = QDateTime(today, QTime(0, 0)).toMSecsSinceEpoch();
-    const int steps = m_series.stepsBetween(midnight, now());
-    if (steps < goal)
+    const MainGoal goal = mainGoal();
+    double value = 0;
+    if (goal.type == GoalType::Steps) {
+        const qint64 midnight = QDateTime(today, QTime(0, 0)).toMSecsSinceEpoch();
+        value = m_series.stepsBetween(midnight, t);
+    } else {
+        if (!m_inWake && m_goalCheckMs > 0 && t >= m_goalCheckMs && t - m_goalCheckMs < GOAL_CHECK_MS)
+            return;
+        m_goalCheckMs = t;
+        value = goalValue(goal.type, summarizeDay(today, m_profile, effectiveRestingHr(m_profile, m_restingEstimate), t));
+    }
+    if (value < goal.target)
         return;
     m_settings->setValue("HealthPrivate/goalDay", today.toJulianDay());
-    emit goalReached(QStringLiteral("steps"), steps, goal);
+    emit goalReached(goal.metric(), (int)std::lround(value), (int)std::lround(goal.target));
+    postGoal(goal, value);
 }
 
 // Last night's sleep, once it is over: when data is looked at after the watch has been still for

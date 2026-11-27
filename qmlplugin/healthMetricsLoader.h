@@ -38,6 +38,8 @@
  *                  { state: noData, calibrating, tracking, analyzing, inRange, aboveRange, belowRange; nightsLeft;
  *                  wakeDate; measured; minutes; hasVariation; devC, loC, hiC (deg C); nights }
  *   skinTempWeek(date): the seven mornings up to it, the oldest first: { date, hasVariation, devC, loC, hiC, state }
+ *   mainGoal():     the main goal (metrics/goals.h, R5 E-18): { type: steps, calories, distance, floors or azm;
+ *                  target } (its keys watched: dataChanged)
  *
  * dataChanged: a step day file changed, or the daemon wrote to health.db (its D-Bus signal HealthChanged).
  */
@@ -85,6 +87,8 @@ public:
     Q_INVOKABLE int defaultLowBpm();
     Q_INVOKABLE void refresh() { emit dataChanged(); }
 
+    // the main goal: { type, target } (metrics/goals.h)
+    Q_INVOKABLE QVariantMap mainGoal();
     // the day's row in health.db ({} if none)
     Q_INVOKABLE QVariantMap daily(QDate date);
     // the skin temperature variation of a morning (M4 WO-13) and of the seven mornings up to it
@@ -122,6 +126,7 @@ private:
 
     QFileSystemWatcher *m_fileWatcher;
     QList<MDConfItem *> m_profileKeys; // HealthProfile::keys(), made at the first profile()
+    QList<MDConfItem *> m_goalKeys;    // goals.h mainGoalKeys(), made at the first mainGoal()
     Health::HealthProfile m_profile;
     QDate m_profileDay; // the day m_profile was read for; invalid: to be read
     Health::HealthProfile m_energyProfile;

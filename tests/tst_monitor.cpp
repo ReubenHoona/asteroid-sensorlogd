@@ -400,9 +400,14 @@ private slots:
         m->evaluate();
         QCOMPARE(poster.posted.size(), 2);
         QCOMPARE(poster.posted[1].summary, QString("Reminder to move"));
-        QCOMPARE(poster.posted[1].body, QString("Goal complete!"));
+        // stock's notification text of HourlyReminderToMoveCelebration (trj.java:166-176): the title, the value
+        QCOMPARE(poster.posted[1].body, QString("Goal complete!\n250/250"));
         QCOMPARE(healthJson(poster.posted[1])["type"].toString(), QString("reminder-to-move-complete"));
         QCOMPARE(healthJson(poster.posted[1])["steps"].toInt(), 250);
+        // full screen in the launcher (x-asteroid-category celebration), no card left, its vibration the post's
+        QCOMPARE(poster.posted[1].hints.value("x-asteroid-category").toString(), QString("celebration"));
+        QVERIFY(poster.posted[1].hints.value("transient").toBool());
+        QCOMPARE(poster.posted[1].hints.value("x-nemo-feedback").toString(), QString("notif_strong"));
     }
 
     void everyHourMetIsTheHourlyActivityCelebration()
@@ -416,8 +421,11 @@ private slots:
         }
         QCOMPARE(poster.posted.size(), 1);
         QCOMPARE(poster.posted[0].summary, QString("Hourly Activity"));
-        QCOMPARE(poster.posted[0].body, QString("9 hr"));
+        QCOMPARE(poster.posted[0].body, QString("Goal complete!\n9 hr"));
         QCOMPARE(healthJson(poster.posted[0])["hours"].toInt(), 9);
+        // a goal achieved (DailyReminderToMoveCelebration): the launcher's screen vibrates, the post does not
+        QVERIFY(poster.posted[0].hints.contains("x-nemo-feedback"));
+        QVERIFY(poster.posted[0].hints.value("x-nemo-feedback").toString().isEmpty());
     }
 
     void aRestartDoesNotRepeatTheReminderOfTheHour()
@@ -498,6 +506,127 @@ private slots:
         again->evaluate();
         QCOMPARE(second.count(), 1);
         QCOMPARE(second[0][1].toInt(), 600);
+    }
+
+    // R5 E-05: the goal reached is a celebration post too (stock's GoalAchievedCelebration of the main goal's type)
+    void theStepsGoalReachedIsPostedAsItsCelebration()
+    {
+        MGConfItem::setTestValue(GOAL, 500);
+        HealthMonitor *m = make(ms(THU, 8, 0));
+        steps(THU, 8, 0, 6, 100);
+        clock = ms(THU, 8, 7);
+        m->evaluate();
+        QCOMPARE(poster.posted.size(), 1);
+        const HealthNotification &n = poster.posted[0];
+        QCOMPARE(n.summary, QString("Steps"));
+        QCOMPARE(n.body, QString("Goal complete!\n600"));
+        QCOMPARE(n.hints.value("x-asteroid-category").toString(), QString("celebration"));
+        QVERIFY(n.hints.value("transient").toBool());
+        QVERIFY(n.hints.value("x-nemo-feedback").toString().isEmpty()); // the launcher's screen vibrates
+        const QJsonObject j = healthJson(n);
+        QCOMPARE(j["type"].toString(), QString("goal"));
+        QCOMPARE(j["metric"].toString(), QString("steps"));
+        QCOMPARE(j["value"].toInt(), 600);
+        QCOMPARE(j["goal"].toInt(), 500);
+        clock = ms(THU, 9, 0);
+        m->evaluate();
+        QCOMPARE(poster.posted.size(), 1); // once a day
+    }
+
+    // R5 E-18: the main goal's type is the phone's; its value of the day from the day's summary
+    void theMainGoalOfAnotherTypeIsItsMetric()
+    {
+        MGConfItem::setTestValue("/org/asteroidos/health/profile/height-cm", 170);
+        MGConfItem::setTestValue("/org/asteroidos/health/goals/main", "distance");
+        MGConfItem::setTestValue("/org/asteroidos/health/goals/distance-m", 1000);
+        // 1300 steps at 0.70555 m (0.415 x 170 cm): 917 m; then 1500: 1058 m
+        testenv::writeDay("stepCounter", THU, QByteArray::number(ms(THU, 8, 10) / 1000) + ":1300\n");
+        HealthMonitor *m = make(ms(THU, 8, 0));
+        QSignalSpy reached(m, &HealthMonitor::goalReached);
+        steps(THU, 8, 0, 10, 60); // what the minutes in memory say does not count for distance (no walk offer)
+        clock = ms(THU, 8, 20);
+        m->evaluate();
+        QCOMPARE(reached.count(), 0);
+        // the day's summary at most every 10 minutes
+        testenv::writeDay("stepCounter", THU, QByteArray::number(ms(THU, 8, 10) / 1000) + ":1300\n"
+                                                  + QByteArray::number(ms(THU, 8, 25) / 1000) + ":1500\n");
+        clock = ms(THU, 8, 26);
+        m->evaluate();
+        QCOMPARE(reached.count(), 0);
+        clock = ms(THU, 8, 31);
+        m->evaluate();
+        QCOMPARE(reached.count(), 1);
+        QCOMPARE(reached[0][0].toString(), QString("distance"));
+        QCOMPARE(reached[0][2].toInt(), 1000);
+        QCOMPARE(poster.posted.size(), 1);
+        QCOMPARE(poster.posted[0].summary, QString("Distance"));
+        QCOMPARE(poster.posted[0].body, QString("Goal complete!\n1.06 km"));
+        const QJsonObject j = healthJson(poster.posted[0]);
+        QCOMPARE(j["metric"].toString(), QString("distance"));
+        QVERIFY(j["value"].toDouble() > 1000 && j["value"].toDouble() < 1100);
+        QCOMPARE(j["goal"].toDouble(), 1000.0);
+        MGConfItem::setTestValue("/org/asteroidos/health/goals/main", QVariant());
+        MGConfItem::setTestValue("/org/asteroidos/health/goals/distance-m", QVariant());
+    }
+
+    void theGoalsKeysAndTheirDefaults()
+    {
+        QCOMPARE(mainGoalKeys().size(), 6);
+        QCOMPARE(mainGoalKeys()[0], QString("/org/asteroidos/health/goals/main"));
+        // none set: steps, 10000
+        MainGoal g = mainGoalFrom({QVariant(), QVariant(), QVariant(), QVariant(), QVariant(), QVariant()});
+        QCOMPARE(g.metric(), QString("steps"));
+        QCOMPARE(g.target, 10000.0);
+        const QList<QPair<QString, double>> defaults = {{"calories", 2000}, {"distance", 8047}, {"floors", 10}, {"azm", 22}};
+        for (const auto &d : defaults) {
+            g = mainGoalFrom({d.first, QVariant(), QVariant(), QVariant(), QVariant(), QVariant()});
+            QCOMPARE(g.metric(), d.first);
+            QCOMPARE(g.target, d.second);
+        }
+        // the type's own value; 0 or less is the default; an unknown type is steps; case and blanks do not matter
+        g = mainGoalFrom({"floors", 8000, 1800, 5000, 14, 30});
+        QCOMPARE(g.target, 14.0);
+        g = mainGoalFrom({" AZM ", 8000, 1800, 5000, 14, -3});
+        QCOMPARE(g.metric(), QString("azm"));
+        QCOMPARE(g.target, 22.0);
+        g = mainGoalFrom({"sleep", 8000, 1800, 5000, 14, 30});
+        QCOMPARE(g.metric(), QString("steps"));
+        QCOMPARE(g.target, 8000.0);
+        DaySummary d;
+        d.steps = 1;
+        d.energyKcal = 2;
+        d.distanceM = 3;
+        d.floors = 4;
+        d.zones.azm = 5;
+        QCOMPARE(goalValue(GoalType::Steps, d), 1.0);
+        QCOMPARE(goalValue(GoalType::Calories, d), 2.0);
+        QCOMPARE(goalValue(GoalType::Distance, d), 3.0);
+        QCOMPARE(goalValue(GoalType::Floors, d), 4.0);
+        QCOMPARE(goalValue(GoalType::Azm, d), 5.0);
+    }
+
+    // stock holds a celebration while an exercise is on (trj.java:160-176) and shows it after: so here, posted when
+    // the workout ends; a reminder for an hour that is over by then is dropped
+    void celebrationsWaitForTheWorkoutsEnd()
+    {
+        settings->setValue("reminders/enabled", true);
+        MGConfItem::setTestValue(GOAL, 1000);
+        HealthMonitor *m = make(ms(THU, 10, 0));
+        m->setWorkoutActive(true);
+        steps(THU, 10, 0, 10, 10);
+        clock = ms(THU, 10, 50);
+        m->evaluate(); // the reminder of 10:50: held
+        steps(THU, 10, 51, 9, 100);
+        clock = ms(THU, 10, 59, 59);
+        m->evaluate(); // the goal (1000) and the hour's 250: held
+        QVERIFY(poster.posted.isEmpty());
+        QCOMPARE(m->m_held.size(), 3);
+        clock = ms(THU, 11, 5);
+        m->setWorkoutActive(false);
+        QCOMPARE(m->m_held.size(), 0);
+        QCOMPARE(poster.posted.size(), 2); // the 10:50 reminder's hour is over
+        QCOMPARE(healthJson(poster.posted[0])["type"].toString(), QString("reminder-to-move-complete"));
+        QCOMPARE(healthJson(poster.posted[1])["type"].toString(), QString("goal"));
     }
 
     void theGoalIsTheOneDconfKey()

@@ -18,6 +18,7 @@
 #include "../common.h"
 #include "../metrics/healthData.h"
 #include "../metrics/healthMetrics.h"
+#include "../metrics/goals.h"
 #include "../metrics/hrAlerts.h"
 #include "../metrics/skinTemp.h"
 #include "../store/healthDb.h"
@@ -83,6 +84,22 @@ void HealthMetricsLoader::onProfileKeyChanged()
 int HealthMetricsLoader::stepGoal() const
 {
     return qMax(1, MDConfItem("/org/asteroidos/ux/steps-goal").value(DEFAULT_STEPS_GOAL).toInt());
+}
+
+QVariantMap HealthMetricsLoader::mainGoal()
+{
+    if (m_goalKeys.isEmpty()) {
+        for (const QString &key : mainGoalKeys()) {
+            MDConfItem *item = new MDConfItem(key, this);
+            connect(item, &MDConfItem::valueChanged, this, &HealthMetricsLoader::dataChanged);
+            m_goalKeys << item;
+        }
+    }
+    QVariantList values;
+    for (MDConfItem *item : m_goalKeys)
+        values << item->value();
+    const MainGoal goal = mainGoalFrom(values);
+    return QVariantMap{{"type", goal.metric()}, {"target", goal.target}};
 }
 
 int HealthMetricsLoader::azmWeeklyGoal() const { return AZM_WEEKLY_GOAL; }

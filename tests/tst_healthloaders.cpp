@@ -258,6 +258,27 @@ private slots:
         QCOMPARE(MGConfItem::testCreated() - before, 2 * HealthProfile::keys().size());
     }
 
+    // R5 E-18: the main goal for the Health app's ring; its keys watched
+    void theMainGoalIsReadAndItsKeysWatched()
+    {
+        HealthMetricsLoader loader;
+        QSignalSpy dataSpy(&loader, &HealthMetricsLoader::dataChanged);
+        QVariantMap g = loader.mainGoal();
+        QCOMPARE(g["type"].toString(), QString("steps"));
+        QCOMPARE(g["target"].toDouble(), 10000.0);
+        MGConfItem::setTestValue("/org/asteroidos/health/goals/main", "floors");
+        QCOMPARE(dataSpy.count(), 1);
+        g = loader.mainGoal();
+        QCOMPARE(g["type"].toString(), QString("floors"));
+        QCOMPARE(g["target"].toDouble(), 10.0);
+        MGConfItem::setTestValue("/org/asteroidos/health/goals/floors", 12);
+        QCOMPARE(dataSpy.count(), 2);
+        QCOMPARE(loader.mainGoal()["target"].toDouble(), 12.0);
+        MGConfItem::setTestValue("/org/asteroidos/health/goals/main", QVariant());
+        MGConfItem::setTestValue("/org/asteroidos/health/goals/floors", QVariant());
+        QCOMPARE(loader.mainGoal()["type"].toString(), QString("steps"));
+    }
+
     void readingsBelowTheAccuracyAreNotCounted()
     {
         profileMale175();

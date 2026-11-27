@@ -71,6 +71,7 @@ add_library(sensorlogd-undertest STATIC
     ${top}/metrics/healthData.cpp ${top}/metrics/healthData.h
     ${top}/metrics/restingHr.cpp ${top}/metrics/restingHr.h
     ${top}/metrics/skinTemp.cpp ${top}/metrics/skinTemp.h
+    ${top}/metrics/goals.cpp ${top}/metrics/goals.h
     ${top}/store/healthDb.cpp ${top}/store/healthDb.h
     ${top}/store/healthImport.cpp ${top}/store/healthImport.h
 )

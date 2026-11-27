@@ -24,6 +24,7 @@
 #include "healthNotifier.h"
 #include "healthWake.h"
 #include "../metrics/autoExercise.h"
+#include "../metrics/goals.h"
 #include "../metrics/healthMetrics.h"
 #include "../metrics/hrAlerts.h"
 #include "../metrics/moveReminder.h"
@@ -36,7 +37,8 @@ class HeartrateSensorPlugin;
 
 /*
  * What the Health app does on its own account while the watch is worn: high and low heart rate alerts
- * (health-fitness-16), reminders to move and their celebrations (-15), the steps goal reached (-10, -14),
+ * (health-fitness-16), reminders to move and their celebrations (-15), the main goal reached (-10, -14; its type
+ * steps, calories, distance, floors or Active Zone Minutes: metrics/goals.h, R5 E-05 / E-18),
  * auto-detected exercise prompts (-28), the nightly sleep estimate (-17; version 2 with the hub's motion and
  * off-body streams and a stage timeline, M4 WO-06, and the day's naps once they are over), and the rows of health.db
  * it writes: the
@@ -76,7 +78,14 @@ class HeartrateSensorPlugin;
  *   hub's deliveries only)
  *   autoExercise/start (true); autoExercise/stop (true) is "End workout reminders", which the Exercise app reads
  *   for its own "Finished working out?" (WorkoutStore::endReminders; no stop offer here, autoExercise.h)
- * The steps goal is the dconf key /org/asteroidos/ux/steps-goal (10000), the profile the keys of healthProfile.h.
+ * The main goal is the dconf keys of goals.h (the type, steps by default: /org/asteroidos/ux/steps-goal, 10000), the
+ * profile the keys of healthProfile.h.
+ *
+ * Celebrations (R5 E-05, E-06): the main goal reached, a reminder to move, its hour's goal reached and every hour
+ * of the window met are posted with x-asteroid-category "celebration" (transient: no card is left), the launcher's
+ * full screen (stock's CelebrationActivity, started directly: trj.java:115-185). During a workout stock holds them
+ * until the exercise is over (trj.java:160-176, the queue c() empties after it): so here, posted at its end (a
+ * reminder whose hour is over by then is dropped).
  *
  * Worn (no reminder to move off the wrist): the sensor hub's off-body sensor when it knows (setOffBody, from the
  * logger's OffBodyPlugin, M4 WO-03; stock gates on it too: sysui's LlobDetector, the hub's algorithms); when it does
@@ -147,7 +156,8 @@ public:
     const Health::MinuteSeries &series() const { return m_series; }
 
 signals:
-    // a daily goal was reached for the first time today (metric "steps"): the launcher's celebration
+    // the main goal was reached for the first time today (metric "steps", "calories", "distance", "floors", "azm";
+    // value and goal rounded): its celebration is posted with it
     void goalReached(const QString &metric, int value, int goal);
     // auto-detected exercise: action "start", activity "walking" / "running" (the stop is the Exercise app's)
     void exerciseOffered(const QString &action, const QString &activity, qlonglong sinceMs);
@@ -180,8 +190,13 @@ private:
     void postAlert(const Health::HrAlert &alert);
     void postMove(const Health::MoveEvent &event);
     void postExercise(const Health::ExerciseOffer &offer);
+    void postGoal(const Health::MainGoal &goal, double value);
+    // a celebration: posted now, or held while a workout is on (stock's queue)
+    void postCelebration(const HealthNotification &n);
+    void releaseCelebrations();
     uint post(HealthNotification n);
     void checkGoal();
+    Health::MainGoal mainGoal() const;
     void checkSleep();
     // the skin temperature sampling on or off by now
     void updateSkinTemp();
@@ -222,7 +237,13 @@ private:
     bool m_wakeAwaitingBatch = false; // the hub flushed: its batch is on the way
     qint64 m_lastLookMs = 0;         // the last evaluate()
     qint64 m_wakeAt = -1;            // what was asked of the wake last
-    MDConfItem *m_goalItem;
+    QList<MDConfItem *> m_goalItems; // goals.h mainGoalKeys()
+    qint64 m_goalCheckMs = 0;        // the last day summary for a goal of another type than steps
+    struct HeldCelebration {
+        HealthNotification notification;
+        qint64 atMs;
+    };
+    QList<HeldCelebration> m_held;   // celebrations of a workout's time, posted at its end
     MDConfItem *m_twelveHourItem;
     Health::HealthDb *m_store = nullptr;
     QScopedPointer<Health::HealthDb> m_ownStore;
