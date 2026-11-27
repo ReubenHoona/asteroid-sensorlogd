@@ -374,6 +374,229 @@ private slots:
         checkTimeline(n.naps[0]);
     }
 
+    // R5 E-30: the evening's naps (18:00-20:00) are looked for; one still going at 20:00 is the next night's
+    void anEveningNapIsLookedFor()
+    {
+        Logs l;
+        typicalNight(l);
+        l.heart(ms(THU, 9, 0), 570, 76);       // the day, 9:00-18:30
+        l.heart(ms(THU, 18, 30), 35, 57);      // a nap 18:30-19:05
+        l.heart(ms(THU, 19, 5), 55, 78);
+        l.batchMotion(ms(THU, 9, 0), ms(THU, 20, 0), {ms(THU, 9, 30), ms(THU, 11, 10), ms(THU, 13, 0), ms(THU, 15, 20),
+                                                      ms(THU, 17, 0), ms(THU, 19, 15)});
+        for (int h : {9, 11, 13, 15, 17})
+            l.walk(ms(THU, h, 50), 5, 50);
+        l.write();
+        const SleepNight n = night();
+        QVERIFY(n.valid);
+        describe("evening nap", n);
+        QCOMPARE(n.naps.size(), 1);
+        QCOMPARE(n.naps[0].startMs, ms(THU, 18, 30));
+        checkTimeline(n.naps[0]);
+        // and the next night's window does not take it again: not a nap of Friday, not its night
+        const SleepNight fri = night(THU.addDays(1));
+        QVERIFY(!fri.valid);
+        QVERIFY(fri.naps.isEmpty());
+    }
+
+    void aSessionStillGoingAtTheWindowsEndIsNoNap()
+    {
+        Logs l;
+        typicalNight(l);
+        l.heart(ms(THU, 9, 0), 600, 76);       // the day, 9:00-19:00
+        l.heart(ms(THU, 19, 0), 90, 57);       // asleep from 19:00, still at 20:00: an early night, not a nap
+        l.batchMotion(ms(THU, 9, 0), ms(THU, 20, 30), {ms(THU, 9, 30), ms(THU, 13, 0), ms(THU, 17, 0)});
+        l.write();
+        const SleepNight n = night();
+        QVERIFY(n.valid);
+        QCOMPARE(n.naps.size(), 0);
+    }
+
+    // R5 E-30: Bedtime mode as a hint, never needed: in Bedtime a heart rate a little higher still counts as asleep,
+    // and a night may begin from 19:00
+    void bedtimeIsAHint()
+    {
+        // a night at 88 bpm: over the lower fifth of the reserve (56 + 0.20 x 134 = 82.8), within the lower fourth
+        // (56 + 0.25 x 134 = 89.5)
+        Logs l;
+        l.wrist(ms(WED, 7, 0), 0);
+        l.heart(ms(WED, 21, 0), 60, 95);
+        l.heart(ms(WED, 22, 0), 480, 88);
+        l.heart(ms(THU, 6, 0), 240, 95);       // up, and the morning
+        l.walk(ms(THU, 6, 5), 30, 60);
+        l.batchMotion(ms(WED, 22, 0), ms(THU, 6, 0));
+        l.batchMotion(ms(THU, 6, 0), ms(THU, 10, 0), {ms(THU, 6, 5), ms(THU, 7, 0), ms(THU, 8, 0), ms(THU, 9, 0)});
+        l.write();
+        QVERIFY(!night().valid); // without Bedtime: no sleep at that rate
+        Logs b;
+        b.rec("bedtime", ms(WED, 21, 55), 1);
+        b.rec("bedtime", ms(THU, 6, 10), 0);
+        b.write();
+        const SleepNight n = night();
+        QVERIFY(n.valid);
+        describe("bedtime", n);
+        QVERIFY(qAbs(n.main.startMs - ms(WED, 22, 0)) <= 15 * MIN);
+        QVERIFY(n.main.asleepMin >= 400);
+        checkTimeline(n.main);
+    }
+
+    void aNightThatBeganAt1930InBedtime()
+    {
+        Logs l;
+        l.wrist(ms(WED, 7, 0), 0);
+        l.heart(ms(WED, 18, 0), 90, 76);
+        l.heart(ms(WED, 19, 30), 600, sine);   // asleep 19:30-05:30
+        l.heart(ms(THU, 5, 30), 60, 80);
+        l.walk(ms(THU, 5, 35), 30, 60);
+        l.batchMotion(ms(WED, 19, 30), ms(THU, 5, 30));
+        l.write();
+        QVERIFY(!night().valid); // a session from 19:30 is not a night's (from 20:00), without Bedtime
+        Logs b;
+        b.rec("bedtime", ms(WED, 19, 20), 1);
+        b.rec("bedtime", ms(THU, 5, 40), 0);
+        b.write();
+        const SleepNight n = night();
+        QVERIFY(n.valid);
+        QVERIFY(qAbs(n.main.startMs - ms(WED, 19, 30)) <= 15 * MIN);
+        QVERIFY(qAbs(n.main.endMs - ms(THU, 5, 30)) <= 15 * MIN);
+    }
+
+    void bedtimeRecordsPerMinute()
+    {
+        const qint64 from = MinuteSeries::minuteOf(ms(WED, 22, 0));
+        // on 22:02:30-22:05:00, off after; the state before the window counts
+        QVector<char> v = bedtimeMinutes({QPointF(ms(WED, 22, 2, 30) / 1000.0, 1), QPointF(ms(WED, 22, 5) / 1000.0, 0)},
+                                         from, 8);
+        QCOMPARE(v, QVector<char>({0, 0, 1, 1, 1, 0, 0, 0}));
+        v = bedtimeMinutes({QPointF(ms(WED, 21, 0) / 1000.0, 1)}, from, 3);
+        QCOMPARE(v, QVector<char>({1, 1, 1}));
+        QCOMPARE(bedtimeMinutes({}, from, 2), QVector<char>({0, 0}));
+    }
+
+    // the monitor logs Bedtime's changes (the launcher's dconf key), only a change
+    void theMonitorLogsBedtime()
+    {
+        HealthMonitor *mon = makeMonitor(ms(THU, 21, 0));
+        QVERIFY(loadStateRecords("bedtime", ms(THU, 0, 0), ms(THU.addDays(1), 0)).isEmpty()); // off: nothing
+        clock = ms(THU, 22, 10);
+        MGConfItem::setTestValue("/org/asteroidos/modes/bedtime", true);
+        clock = ms(THU.addDays(1), 6, 40);
+        MGConfItem::setTestValue("/org/asteroidos/modes/bedtime", false);
+        QList<QPointF> r = loadStateRecords("bedtime", ms(THU, 0, 0), ms(THU.addDays(1), 12, 0));
+        QCOMPARE(r.size(), 2);
+        QCOMPARE((qint64)r[0].x() * 1000, ms(THU, 22, 10));
+        QCOMPARE((int)r[0].y(), 1);
+        QCOMPARE((int)r[1].y(), 0);
+        // a restart with Bedtime off writes nothing more
+        mon = makeMonitor(ms(THU.addDays(1), 7, 0));
+        QCOMPARE(loadStateRecords("bedtime", ms(THU, 0, 0), ms(THU.addDays(1), 12, 0)).size(), 2);
+        // one with it on (switched while the daemon was not running) logs it
+        MGConfItem::setTestValue("/org/asteroidos/modes/bedtime", true);
+        r = loadStateRecords("bedtime", ms(THU, 0, 0), ms(THU.addDays(1), 12, 0));
+        QCOMPARE(r.size(), 3);
+        Q_UNUSED(mon)
+    }
+
+    // R5 E-10: the Morning Brief at the night's end (stored), when Bedtime did not bring it; once a day
+    void theMorningBriefComesWithTheNightWithoutBedtime()
+    {
+        Logs l;
+        typicalNight(l);
+        l.write();
+        QList<HealthNotification> posted;
+        struct Poster : NotificationPoster {
+            QList<HealthNotification> *out;
+            uint post(const HealthNotification &n) override { out->append(n); return 1; }
+        } capture;
+        capture.out = &posted;
+        monitor.reset();
+        clock = ms(THU, 7, 40);
+        monitor.reset(new HealthMonitor(settings, &capture));
+        monitor->setClock([this] { return clock; });
+        monitor->start();
+        monitor->evaluate();
+        SleepNight stored;
+        QVERIFY(HealthDb::readNight(healthDbPath(), THU, &stored));
+        QList<HealthNotification> briefs;
+        for (const HealthNotification &n : posted)
+            if (n.hints.value("x-eos-open-page").toString() == "morning")
+                briefs << n;
+        QCOMPARE(briefs.size(), 1);
+        QCOMPARE(briefs[0].summary, QString("Start your day"));
+        QCOMPARE(briefs[0].body, QString::fromUtf8("Good morning! Here’s how your day is shaping up."));
+        QCOMPARE(briefs[0].hints.value("x-eos-app").toString(), QString("asteroid-health"));
+        // once a day
+        posted.clear();
+        clock = ms(THU, 9, 0);
+        monitor->evaluate();
+        for (const HealthNotification &n : posted)
+            QVERIFY(n.hints.value("x-eos-open-page").toString() != "morning");
+        monitor.reset();
+    }
+
+    void noMorningBriefFromHereAfterABedtimeNight()
+    {
+        Logs l;
+        typicalNight(l);
+        l.rec("bedtime", ms(WED, 22, 20), 1);
+        l.rec("bedtime", ms(THU, 7, 0), 0); // the launcher posted it then
+        l.write();
+        QList<HealthNotification> posted;
+        struct Poster : NotificationPoster {
+            QList<HealthNotification> *out;
+            uint post(const HealthNotification &n) override { out->append(n); return 1; }
+        } capture;
+        capture.out = &posted;
+        monitor.reset();
+        clock = ms(THU, 7, 40);
+        monitor.reset(new HealthMonitor(settings, &capture));
+        monitor->setClock([this] { return clock; });
+        monitor->start();
+        monitor->evaluate();
+        QVERIFY(HealthDb::readNight(healthDbPath(), THU, nullptr));
+        for (const HealthNotification &n : posted)
+            QVERIFY(n.hints.value("x-eos-open-page").toString() != "morning");
+        // and not in the afternoon either: a night stored late says nothing of the morning
+        monitor.reset();
+    }
+
+    // R5 E-30: a day of naps and no night keeps its naps
+    void aDayOfNapsWithoutANightKeepsThem()
+    {
+        Logs l;
+        l.wrist(ms(WED, 7, 0), 0);
+        l.wrist(ms(WED, 21, 0), 1);            // off the wrist all night
+        l.wrist(ms(THU, 9, 0), 0);
+        l.heart(ms(THU, 9, 0), 240, 78);
+        l.heart(ms(THU, 13, 0), 40, 57);       // a nap 13:00-13:40
+        l.heart(ms(THU, 13, 40), 200, 78);
+        l.batchMotion(ms(THU, 9, 0), ms(THU, 17, 0), {ms(THU, 9, 30), ms(THU, 10, 20), ms(THU, 11, 10), ms(THU, 12, 0),
+                                                      ms(THU, 13, 50), ms(THU, 14, 30), ms(THU, 15, 20)});
+        for (int h : {9, 10, 11, 12, 14, 15, 16})
+            l.walk(ms(THU, h, 50), 5, 50);
+        l.write();
+        const SleepNight n = night();
+        QVERIFY(!n.valid);
+        QCOMPARE(n.naps.size(), 1);
+
+        HealthMonitor *mon = makeMonitor(ms(THU, 13, 50));
+        mon->evaluate();
+        QCOMPARE(HealthDb::readCounts(healthDbPath())["naps"].toLongLong(), 0LL); // not over 30 minutes yet
+        clock = ms(THU, 14, 20);
+        mon->evaluate();
+        SleepNight stored;
+        QVERIFY(!HealthDb::readNight(healthDbPath(), THU, &stored)); // no night
+        QCOMPARE(stored.naps.size(), 1);                             // its nap
+        QCOMPARE(stored.naps[0].startMs, ms(THU, 13, 0));
+        QCOMPARE(HealthDb::readCounts(healthDbPath())["naps"].toLongLong(), 1LL);
+        QCOMPARE(HealthDb::readCounts(healthDbPath())["nights"].toLongLong(), 0LL);
+        // nothing new: nothing written
+        const qint64 seq = mon->store()->seq();
+        clock = ms(THU, 16, 0);
+        mon->evaluate();
+        QCOMPARE(mon->store()->seq(), seq);
+    }
+
     void theWatchTakenOffInTheNight()
     {
         Logs l;

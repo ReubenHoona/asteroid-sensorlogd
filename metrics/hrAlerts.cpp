@@ -20,6 +20,19 @@ void HrAlertDetector::reset()
     m_low = Run();
 }
 
+qint64 HrAlertDetector::dueMs() const
+{
+    qint64 due = -1;
+    for (const Run *r : {&m_high, &m_low}) {
+        if (r->length <= 0 || r->alerted)
+            continue;
+        const qint64 at = MinuteSeries::msOf(r->start + RUN_MINUTES);
+        if (due < 0 || at < due)
+            due = at;
+    }
+    return due;
+}
+
 // a member extends the run, anything else ends it (and the next run may alert again)
 void HrAlertDetector::advance(Run &run, bool member, qint64 minute, double hr)
 {

@@ -246,7 +246,9 @@ private slots:
         MGConfItem::setTestValue(P + "resting-hr", 50);
         QCOMPARE(loader.restingHr(), 50);
         QCOMPARE(loader.zones()[0].toMap()["startBpm"].toInt(), 50);
+        QCOMPARE(loader.sleepGoal(), 480);
         MGConfItem::setTestValue("/org/asteroidos/ux/sleep-goal", 420);
+        QCOMPARE(loader.sleepGoal(), 420); // R5 E-22
         QCOMPARE(profileSpy.count(), 7);
         QCOMPARE(dataSpy.count(), 7);
         MGConfItem::setTestValue(P + "height-cm", 190); // the same value: no change
@@ -256,6 +258,105 @@ private slots:
         QCOMPARE(loader.summary(day()), fresh.summary(day()));
         QCOMPARE(loader.zoneDays(day().addDays(-6), day()), fresh.zoneDays(day().addDays(-6), day()));
         QCOMPARE(MGConfItem::testCreated() - before, 2 * HealthProfile::keys().size());
+    }
+
+    // R5 E-09: the day's cardio load and its target: the closed days' loads from health.db, the day's own from its
+    // minutes; the summary has it too
+    void theCardioLoadAndItsTarget()
+    {
+        profileMale175();
+        const QDate d = day();
+        HealthDb store(healthDbPath());
+        // no history: calibrating, 7 days to go
+        addHeart(d, 7, 0, 30, 150);
+        HealthMetricsLoader loader;
+        QVariantMap c = loader.cardioLoad(d);
+        QVERIFY(!c["hasTarget"].toBool());
+        QCOMPARE(c["daysLeft"].toInt(), 7);
+        QCOMPARE(c["state"].toString(), QString());
+        const int load = c["load"].toInt();
+        QVERIFY(load > 20);
+        QCOMPARE(qRound(loader.summary(d)["cardioLoad"].toDouble()), load);
+        // 7 closed days before it, 40 each: target 32-52; the day's own load decides the state
+        for (int i = 1; i <= 7; i++) {
+            DailyTotals t;
+            t.cardioLoad = 40;
+            QVERIFY(store.setDailyTotals(d.addDays(-i), t, ms(d.addDays(1 - i), 0, 30)));
+        }
+        // a closed day before the cardio load (none in its row) is not a day of the target
+        DailyTotals old;
+        QVERIFY(store.setDailyTotals(d.addDays(-8), old, ms(d.addDays(-7), 0, 30)));
+        DailyRecord r;
+        QVERIFY(HealthDb::readDaily(healthDbPath(), d.addDays(-8), &r));
+        QCOMPARE(r.totals.cardioLoad, -1.0);
+        c = loader.cardioLoad(d);
+        QVERIFY(c["hasTarget"].toBool());
+        QCOMPARE(c["low"].toInt(), 32);
+        QCOMPARE(c["high"].toInt(), 52);
+        QCOMPARE(c["state"].toString(), load < 32 ? QString("below") : load > 52 ? QString("above") : QString("in"));
+        const QVariantList week = c["week"].toList();
+        QCOMPARE(week.size(), 7);
+        QCOMPARE(week[0].toMap()["load"].toInt(), 40);
+        QCOMPARE(week[6].toMap()["load"].toInt(), load);
+        QCOMPARE(week[6].toMap()["date"].toDate(), d);
+    }
+
+    // R5 E-21: the hourly page's "Most inactive today" from the day's files, the day's sleep left out
+    void theHourlyActivityHasTheDaysMostInactiveSpan()
+    {
+        const QDate d = day();
+        testenv::writeDay("stepCounter", d, rec(ms(d, 9, 0), 0) + rec(ms(d, 12, 0), 0));
+        addHeart(d, 9, 0, 40, 62);  // 9:00-9:40, no steps
+        addHeart(d, 10, 0, 25, 64); // 10:00-10:25
+        HealthMetricsLoader loader;
+        QVariantMap h = loader.hourly(d);
+        QCOMPARE(h["inactiveMin"].toInt(), 40);
+        QCOMPARE((qint64)h["inactiveStartMs"].toDouble(), ms(d, 9, 0));
+        QCOMPARE((qint64)h["inactiveEndMs"].toDouble(), ms(d, 9, 40));
+        // a nap stored for the day over 9:10-9:30: the longest is 10:00-10:25 now
+        HealthDb store(healthDbPath());
+        SleepNight n;
+        n.wakeDate = d;
+        n.valid = true;
+        n.main.startMs = ms(d.addDays(-1), 23, 0);
+        n.main.endMs = ms(d, 6, 30);
+        n.main.asleepMin = 400;
+        SleepSession nap;
+        nap.startMs = ms(d, 9, 10);
+        nap.endMs = ms(d, 9, 30);
+        nap.asleepMin = 20;
+        n.naps << nap;
+        QVERIFY(store.storeNight(n, "test"));
+        h = loader.hourly(d);
+        QCOMPARE(h["inactiveMin"].toInt(), 25);
+        QCOMPARE((qint64)h["inactiveStartMs"].toDouble(), ms(d, 10, 0));
+        // a day with nothing worn: none
+        QCOMPARE(loader.hourly(d.addDays(-3))["inactiveMin"].toInt(), 0);
+    }
+
+    // R5 E-18: the main goal for the Health app's ring; its keys watched
+    void theMainGoalIsReadAndItsKeysWatched()
+    {
+        HealthMetricsLoader loader;
+        QSignalSpy dataSpy(&loader, &HealthMetricsLoader::dataChanged);
+        QVariantMap g = loader.mainGoal();
+        QCOMPARE(g["type"].toString(), QString("steps"));
+        QCOMPARE(g["target"].toDouble(), 10000.0);
+        MGConfItem::setTestValue("/org/asteroidos/health/goals/main", "floors");
+        QCOMPARE(dataSpy.count(), 1);
+        g = loader.mainGoal();
+        QCOMPARE(g["type"].toString(), QString("floors"));
+        QCOMPARE(g["target"].toDouble(), 10.0);
+        MGConfItem::setTestValue("/org/asteroidos/health/goals/floors", 12);
+        QCOMPARE(dataSpy.count(), 2);
+        QCOMPARE(loader.mainGoal()["target"].toDouble(), 12.0);
+        // the steps goal is LoggerSettings' to tell: no second dataChanged from here
+        MGConfItem::setTestValue("/org/asteroidos/ux/steps-goal", 9000);
+        QCOMPARE(dataSpy.count(), 2);
+        MGConfItem::setTestValue("/org/asteroidos/ux/steps-goal", QVariant());
+        MGConfItem::setTestValue("/org/asteroidos/health/goals/main", QVariant());
+        MGConfItem::setTestValue("/org/asteroidos/health/goals/floors", QVariant());
+        QCOMPARE(loader.mainGoal()["type"].toString(), QString("steps"));
     }
 
     void readingsBelowTheAccuracyAreNotCounted()

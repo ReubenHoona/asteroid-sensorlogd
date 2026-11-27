@@ -18,6 +18,7 @@
 #include "../common.h"
 #include "../metrics/healthData.h"
 #include "../metrics/healthMetrics.h"
+#include "../metrics/goals.h"
 #include "../metrics/hrAlerts.h"
 #include "../metrics/skinTemp.h"
 #include "../store/healthDb.h"
@@ -85,6 +86,69 @@ int HealthMetricsLoader::stepGoal() const
     return qMax(1, MDConfItem("/org/asteroidos/ux/steps-goal").value(DEFAULT_STEPS_GOAL).toInt());
 }
 
+int HealthMetricsLoader::sleepGoal()
+{
+    return profile().sleepGoalMin;
+}
+
+QVariantMap HealthMetricsLoader::mainGoal()
+{
+    if (m_goalKeys.isEmpty()) {
+        for (const QString &key : mainGoalKeys()) {
+            MDConfItem *item = new MDConfItem(key, this);
+            // the steps goal's change is told by LoggerSettings.stepGoalChanged already (the readers bind to it): a
+            // second dataChanged for it would only make them read every day again
+            if (key != QLatin1String(goalKey(GoalType::Steps)))
+                connect(item, &MDConfItem::valueChanged, this, &HealthMetricsLoader::dataChanged);
+            m_goalKeys << item;
+        }
+    }
+    QVariantList values;
+    for (MDConfItem *item : m_goalKeys)
+        values << item->value();
+    const MainGoal goal = mainGoalFrom(values);
+    return QVariantMap{{"type", goal.metric()}, {"target", goal.target}};
+}
+
+// A day's cardio load: today's from its minutes up to now, a day before it from its closed row in health.db (its
+// minutes if it has none yet: a day not closed). The target from the closed rows of the 28 days before it.
+QVariantMap HealthMetricsLoader::cardioLoad(QDate date)
+{
+    const QDate today = QDate::currentDate();
+    QMap<QDate, double> loads;
+    for (const DailyRecord &r : HealthDb::readDailyRange(healthDbPath(), date.addDays(-CARDIO_HISTORY_DAYS), date))
+        if (r.totals.cardioLoad >= 0)
+            loads.insert(r.date, r.totals.cardioLoad);
+    auto loadOf = [&](const QDate &d) {
+        if (d > today)
+            return -1.0;
+        if (d != today && loads.contains(d))
+            return loads.value(d);
+        if (d != today && d < today.addDays(-1))
+            return -1.0; // closed with no load: a day before the cardio load
+        return summary(d).value("cardioLoad").toDouble();
+    };
+    QList<double> history;
+    for (QDate d = date.addDays(-CARDIO_HISTORY_DAYS); d < date; d = d.addDays(1))
+        if (loads.contains(d))
+            history << loads.value(d);
+    const CardioTarget target = cardioTarget(history);
+    const double load = loadOf(date);
+    QVariantList week;
+    for (int i = 6; i >= 0; i--) {
+        const QDate d = date.addDays(-i);
+        const double l = i == 0 ? load : loadOf(d);
+        week << QVariantMap{{"date", QDateTime(d, QTime(0, 0))}, {"load", l >= 0 ? (int)std::lround(l) : -1}};
+    }
+    const int rounded = load >= 0 ? (int)std::lround(load) : 0;
+    QString state;
+    if (target.known)
+        state = rounded < target.low ? QStringLiteral("below") : rounded > target.high ? QStringLiteral("above")
+                                                                                      : QStringLiteral("in");
+    return QVariantMap{{"load", rounded}, {"hasTarget", target.known}, {"low", target.low}, {"high", target.high},
+                       {"daysLeft", target.daysLeft}, {"state", state}, {"week", week}};
+}
+
 int HealthMetricsLoader::azmWeeklyGoal() const { return AZM_WEEKLY_GOAL; }
 int HealthMetricsLoader::hourlyStepGoal() const { return HOURLY_STEPS; }
 
@@ -114,6 +178,7 @@ QVariantMap HealthMetricsLoader::summary(QDate date)
     m["restingHr"] = c.resting;
     m["maxHr"] = c.profile.maxHr();
     m["strideM"] = strideM(c.profile);
+    m["cardioLoad"] = d.cardioLoad;
     return m;
 }
 
@@ -139,20 +204,37 @@ QVariantList HealthMetricsLoader::zoneDays(QDate from, QDate to)
     const QList<ZoneMinutes> days = zoneMinutesOfDays(from, to, c.profile, c.resting, c.nowMs);
     for (int i = 0; i < days.size(); i++) {
         const ZoneMinutes &z = days[i];
-        out << QVariantMap{{"date", from.addDays(i)}, {"zoneLight", z.light}, {"zoneModerate", z.moderate},
-                           {"zoneVigorous", z.vigorous}, {"zonePeak", z.peak}, {"azm", z.azm}};
+        // the day's local midnight: a QDate reaches QML as a Date at midnight UTC, the day before west of it
+        out << QVariantMap{{"date", QDateTime(from.addDays(i), QTime(0, 0))}, {"zoneLight", z.light},
+                           {"zoneModerate", z.moderate}, {"zoneVigorous", z.vigorous}, {"zonePeak", z.peak},
+                           {"azm", z.azm}};
     }
     return out;
 }
 
 QVariantMap HealthMetricsLoader::hourly(QDate date)
 {
-    const HourlyActivity h = hourlyActivity(loadDay(date), date);
+    const MinuteSeries series = loadDay(date);
+    const HourlyActivity h = hourlyActivity(series, date);
     QVariantList hourSteps;
     for (int s : h.hourSteps)
         hourSteps << s;
+    // the day's sleep (the night that ended on it, its naps, a night that began on its evening) is not inactive time
+    QList<QPair<qint64, qint64>> asleep;
+    for (const QDate &wake : {date, date.addDays(1)}) {
+        SleepNight n;
+        HealthDb::readNight(healthDbPath(), wake, &n);
+        if (n.valid)
+            asleep << qMakePair(n.main.startMs, n.main.endMs);
+        for (const SleepSession &nap : n.naps)
+            asleep << qMakePair(nap.startMs, nap.endMs);
+    }
+    qint64 from, to;
+    dayRange(date, QDateTime::currentMSecsSinceEpoch(), &from, &to);
+    const InactiveSpan inactive = longestInactive(series, from, to, asleep);
     return QVariantMap{{"hoursMet", h.hoursMet}, {"hoursTotal", h.hoursTotal}, {"hourSteps", hourSteps},
-                       {"stepsPerHour", HOURLY_STEPS}};
+                       {"stepsPerHour", HOURLY_STEPS}, {"inactiveStartMs", (double)inactive.startMs},
+                       {"inactiveEndMs", (double)inactive.endMs}, {"inactiveMin", inactive.minutes}};
 }
 
 QVariantList HealthMetricsLoader::zones()

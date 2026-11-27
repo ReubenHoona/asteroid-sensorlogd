@@ -22,6 +22,9 @@ add_executable(
     healthMonitor.h
     healthNotifier.cpp
     healthNotifier.h
+    healthWake.h
+    keepaliveWake.cpp
+    keepaliveWake.h
     ${HEALTH_METRICS_SOURCES}
     ../common.cpp
     ../common.h
@@ -37,6 +40,7 @@ target_link_libraries(
         Qt::Sensors
         ${mlite6_LIBRARIES}
         ${sqlite3_LIBRARIES}
+        ${keepalive_LIBRARIES}
 )
 target_include_directories(sensorlogd PRIVATE ${mlite6_INCLUDE_DIRS} ${sqlite3_INCLUDE_DIRS})
 install(TARGETS sensorlogd DESTINATION bin)

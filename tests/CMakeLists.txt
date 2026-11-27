@@ -29,6 +29,8 @@ add_library(sensorlogd-testsupport STATIC
     compat/QtSensors/qstepcountersensor.h
     compat/mgconfitem.h
     compat/compatsensors.cpp
+    compat/keepalive/backgroundactivity.h
+    compat/backgroundactivity.cpp
     fakes/fakesensorbackend.h
     fakes/fakesensorbackend.cpp
 )
@@ -58,6 +60,8 @@ add_library(sensorlogd-undertest STATIC
     ${top}/qmlplugin/loggerSettings.cpp ${top}/qmlplugin/loggerSettings.h
     ${top}/daemon/healthMonitor.cpp ${top}/daemon/healthMonitor.h
     ${top}/daemon/healthNotifier.cpp ${top}/daemon/healthNotifier.h
+    ${top}/daemon/healthWake.h
+    ${top}/daemon/keepaliveWake.cpp ${top}/daemon/keepaliveWake.h
     ${top}/metrics/healthProfile.cpp ${top}/metrics/healthProfile.h
     ${top}/metrics/healthMetrics.cpp ${top}/metrics/healthMetrics.h
     ${top}/metrics/hrAlerts.cpp ${top}/metrics/hrAlerts.h
@@ -67,6 +71,7 @@ add_library(sensorlogd-undertest STATIC
     ${top}/metrics/healthData.cpp ${top}/metrics/healthData.h
     ${top}/metrics/restingHr.cpp ${top}/metrics/restingHr.h
     ${top}/metrics/skinTemp.cpp ${top}/metrics/skinTemp.h
+    ${top}/metrics/goals.cpp ${top}/metrics/goals.h
     ${top}/store/healthDb.cpp ${top}/store/healthDb.h
     ${top}/store/healthImport.cpp ${top}/store/healthImport.h
 )

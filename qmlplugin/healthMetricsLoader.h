@@ -38,6 +38,12 @@
  *                  { state: noData, calibrating, tracking, analyzing, inRange, aboveRange, belowRange; nightsLeft;
  *                  wakeDate; measured; minutes; hasVariation; devC, loC, hiC (deg C); nights }
  *   skinTempWeek(date): the seven mornings up to it, the oldest first: { date, hasVariation, devC, loC, hiC, state }
+ *   mainGoal():     the main goal (metrics/goals.h, R5 E-18): { type: steps, calories, distance, floors or azm;
+ *                  target } (its keys watched: dataChanged; the steps goal's is LoggerSettings.stepGoalChanged)
+ *   cardioLoad(date): the day's cardio load and its target (healthMetrics.h, R5 E-09): { load (today up to now),
+ *                  hasTarget, low, high, daysLeft (days with a load still needed for a target), state: below, in,
+ *                  above or "" (no target), week: the seven days up to it, the oldest first, [{ date, load }] (-1:
+ *                  none) }
  *
  * dataChanged: a step day file changed, or the daemon wrote to health.db (its D-Bus signal HealthChanged).
  */
@@ -66,7 +72,8 @@ public:
     // today up to now): [{ date, zoneLight, zoneModerate, zoneVigorous, zonePeak, azm }], the oldest first, the
     // numbers of summary(), from one read of the heart rate database and one of the resting rate
     Q_INVOKABLE QVariantList zoneDays(QDate from, QDate to);
-    // { hoursMet, hoursTotal, hourSteps[24], stepsPerHour }
+    // { hoursMet, hoursTotal, hourSteps[24], stepsPerHour, and the day's longest inactive span (R5 E-21, stock's
+    // "Most inactive today", healthMetrics.h longestInactive): inactiveStartMs, inactiveEndMs, inactiveMin (0: none) }
     Q_INVOKABLE QVariantMap hourly(QDate date);
 
     // the heart rate zones for the profile: [{ name, startBpm, endBpm }], Light first ("Heart rate zones based
@@ -79,12 +86,19 @@ public:
     // the day's resting heart rate, estimated once a day by the daemon (metrics/restingHr.h); -1: none
     Q_INVOKABLE int restingHrOf(QDate date);
     Q_INVOKABLE int maxHr();
+    // the sleep goal in force, minutes a night (the profile's: /org/asteroidos/ux/sleep-goal, 60 to 1440, else 480;
+    // a change is a profileChanged): the Health app's Sleep card and page show it (R5 E-22)
+    Q_INVOKABLE int sleepGoal();
     // the thresholds of the high and low heart rate alerts while the user has set none: stock's 120 and 50
     // (what the Health settings show then)
     Q_INVOKABLE int defaultHighBpm();
     Q_INVOKABLE int defaultLowBpm();
     Q_INVOKABLE void refresh() { emit dataChanged(); }
 
+    // the main goal: { type, target } (metrics/goals.h)
+    Q_INVOKABLE QVariantMap mainGoal();
+    // the day's cardio load and its target (R5 E-09)
+    Q_INVOKABLE QVariantMap cardioLoad(QDate date);
     // the day's row in health.db ({} if none)
     Q_INVOKABLE QVariantMap daily(QDate date);
     // the skin temperature variation of a morning (M4 WO-13) and of the seven mornings up to it
@@ -122,6 +136,7 @@ private:
 
     QFileSystemWatcher *m_fileWatcher;
     QList<MDConfItem *> m_profileKeys; // HealthProfile::keys(), made at the first profile()
+    QList<MDConfItem *> m_goalKeys;    // goals.h mainGoalKeys(), made at the first mainGoal()
     Health::HealthProfile m_profile;
     QDate m_profileDay; // the day m_profile was read for; invalid: to be read
     Health::HealthProfile m_energyProfile;

@@ -62,6 +62,7 @@ struct DaySummary {
     int floors = 0;
     ZoneMinutes zones;
     HourlyActivity hourly;
+    double cardioLoad = 0; // R5 E-09 (healthMetrics.h)
 };
 DaySummary summarizeDay(const QDate &day, const HealthProfile &profile, int restingHr, qint64 nowMs);
 // the time [fromMs, toMs) a day's numbers are for: the local day, up to nowMs if it is today

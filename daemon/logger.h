@@ -30,6 +30,7 @@
 #include "sensorPlugins/skinTempSensor.h"
 #include "healthMonitor.h"
 #include "healthNotifier.h"
+#include "healthWake.h"
 #include "../store/healthDb.h"
 
 /*
@@ -68,6 +69,11 @@
  * night's sleep: the Health monitor says when, the plugin subscribes to it on
  * sensorfwd's hub connection then and writes health.db skin_temp. Settings:
  * skinTemp/enabled (true).
+ * The one system wake of the daemon's own is the Health monitor's (R5 E-04,
+ * healthWake.h, keepaliveWake.h): the reminder to move at minute 50 and the
+ * heart rate checks with the screen off, each with a flush of the hub's batch.
+ * Settings: health/wake (true; false: none, the monitor looks at the hub's
+ * deliveries and display on only).
  */
 class Logger : public QObject, protected QDBusContext
 {
@@ -155,6 +161,7 @@ private:
     bool m_hubWorkout = false;
     DBusNotificationPoster m_poster;
     HealthMonitor *m_health = nullptr;
+    HealthWake *m_wake = nullptr; // the monitor's wake (made once, kept over resetup)
     Health::HealthDb *m_store = nullptr;
     bool daemonFresh;
     QSettings *settings;

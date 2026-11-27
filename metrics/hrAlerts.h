@@ -68,6 +68,10 @@ public:
 
     // the minute (ms / 60000) up to which the minutes were looked at; the next to look at is after it
     qint64 seenUpTo() const { return m_seen; }
+    // a run under way that has not alerted: when its RUN_MINUTES-th minute is over (ms since the epoch), the
+    // earlier of the high and the low one; -1: none. The monitor's wake comes then (R5 E-04), as stock's alert
+    // comes when the hub's detector has its 10 minutes.
+    qint64 dueMs() const;
     // begin after this minute (the minutes up to it are not looked at)
     void setSeen(qint64 minute) { m_seen = minute; }
     void reset();

@@ -478,6 +478,84 @@ private slots:
         QCOMPARE(w.hoursMet, 2); // hours 8 (600) and 11 (300)
     }
 
+    // ---- cardio load (R5 E-09): Banister's TRIMP from a third of the reserve up, its target from 28 days ----
+    void cardioLoadIsTrimpOfTheEffortMinutes()
+    {
+        // resting 60, maximum 190 (30 years): reserve 130
+        QCOMPARE(trimpForMinute(98, 190, 60, HealthProfile::Male), 0.0);   // 29 % of the reserve: daily living
+        QCOMPARE(trimpForMinute(0, 190, 60, HealthProfile::Male), 0.0);
+        const double hrr = (125.0 - 60) / 130; // 0.5
+        QVERIFY(qAbs(trimpForMinute(125, 190, 60, HealthProfile::Male) - hrr * 0.64 * std::exp(1.92 * hrr)) < 1e-9);
+        QVERIFY(qAbs(trimpForMinute(125, 190, 60, HealthProfile::Female) - hrr * 0.86 * std::exp(1.67 * hrr)) < 1e-9);
+        const double mean = (trimpForMinute(125, 190, 60, HealthProfile::Male)
+                             + trimpForMinute(125, 190, 60, HealthProfile::Female)) / 2;
+        QVERIFY(qAbs(trimpForMinute(125, 190, 60, HealthProfile::Unspecified) - mean) < 1e-9);
+        // a harder minute costs more than its share
+        QVERIFY(trimpForMinute(164, 190, 60, HealthProfile::Male) > 2 * trimpForMinute(125, 190, 60, HealthProfile::Male));
+        // a 30-minute run at 70 % of the reserve and a quiet day: about 50 (stock's daily loads are tens)
+        MinuteSeries s;
+        fill(s, THU, 7, 0, 30, 150, 151);
+        fill(s, THU, 9, 0, 480, 0, 72);
+        const double load = cardioLoad(s, minuteAt(THU, 0), minuteAt(THU, 23, 59), profile(), 60);
+        QVERIFY2(load > 40 && load < 60, qPrintable(QString::number(load)));
+        QCOMPARE(cardioLoad(s, minuteAt(THU, 9), minuteAt(THU, 17), profile(), 60), 0.0);
+    }
+
+    void theCardioTargetIsTheLastWeeksWithCalibration()
+    {
+        CardioTarget t = cardioTarget({});
+        QVERIFY(!t.known);
+        QCOMPARE(t.daysLeft, 7);
+        t = cardioTarget({40, 50, -1, 60, 30, 20, 50}); // 6 days with a load
+        QVERIFY(!t.known);
+        QCOMPARE(t.daysLeft, 1);
+        t = cardioTarget({40, 50, 60, 30, 20, 50, 60});  // mean 44.29
+        QVERIFY(t.known);
+        QCOMPARE(t.daysLeft, 0);
+        QCOMPARE(t.low, 35);
+        QCOMPARE(t.high, 58);
+        t = cardioTarget({0, 0, 0, 0, 0, 0, 0});
+        QVERIFY(t.known);
+        QCOMPARE(t.low, 0);
+        QCOMPARE(t.high, 1);
+    }
+
+    // ---- the most inactive span of a day (R5 E-21, stock's "Most inactive today") ----
+    void theLongestInactiveSpanIsWornStillAndAwake()
+    {
+        MinuteSeries s;
+        fill(s, THU, 8, 0, 30, 0, 64);    // 8:00-8:30 still at the desk: 30
+        fill(s, THU, 8, 30, 10, 80, 90);  // a walk
+        fill(s, THU, 8, 40, 45, 3, 66);   // 8:40-9:25 a few steps a minute, still inactive: 45
+        fill(s, THU, 9, 25, 2, 40, 80);   // up
+        fill(s, THU, 9, 27, 20, 0, 0);    // 9:27-9:47 no reading at all: off the wrist, not inactive
+        fill(s, THU, 9, 47, 15, 0, 62);   // 15 more
+        const qint64 from = ms(THU, 0, 0), to = ms(THU, 12, 0);
+        InactiveSpan i = longestInactive(s, from, to);
+        QCOMPARE(i.minutes, 45);
+        QCOMPARE(i.startMs, ms(THU, 8, 40));
+        QCOMPARE(i.endMs, ms(THU, 9, 25));
+        // a gap of up to 5 minutes between readings is worn (the hub's readings pause when the fit is poor)
+        MinuteSeries g;
+        for (int m = 0; m < 60; m += 5)
+            g.addHr(ms(THU, 13, m), 60);
+        i = longestInactive(g, from, ms(THU, 18, 0));
+        QCOMPARE(i.minutes, 56); // 13:00 to the last reading at 13:55
+        // sleep is not inactive: a nap 8:50-9:10 splits the 45
+        i = longestInactive(s, from, to, {qMakePair(ms(THU, 8, 50), ms(THU, 9, 10))});
+        QCOMPARE(i.minutes, 30);
+        QCOMPARE(i.startMs, ms(THU, 8, 0));
+        // under 10 minutes: none; the minute of `to` is not over
+        MinuteSeries short_;
+        fill(short_, THU, 10, 0, 9, 0, 60);
+        QCOMPARE(longestInactive(short_, from, to).minutes, 0);
+        fill(short_, THU, 10, 9, 20, 0, 60);
+        i = longestInactive(short_, from, ms(THU, 10, 15, 30));
+        QCOMPARE(i.minutes, 15);
+        QCOMPARE(i.endMs, ms(THU, 10, 15));
+        QCOMPARE(longestInactive(MinuteSeries(), from, to).minutes, 0);
+    }
+
     // ---- high and low heart rate alerts ----
     void aTenMinuteRunAboveTheHighThresholdAlertsOnce()
     {

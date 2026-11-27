@@ -20,6 +20,8 @@ find_package(Qt6 COMPONENTS Core DBus Qml Sensors REQUIRED)
 pkg_check_modules(mlite6 REQUIRED mlite6)
 # every heart rate reading (daemon/sensorPlugins/heartrateDb.h)
 pkg_check_modules(sqlite3 REQUIRED sqlite3)
+# the Health monitor's own system wake (R5 E-04): libkeepalive's BackgroundActivity (dsme iphb, mce keepalive)
+pkg_check_modules(keepalive REQUIRED keepalive)
 
 # the Health metrics (distance, energy, floors, zones, alerts, reminders, sleep, auto exercise) and the health
 # database (store/: health.db, its one-time import), shared by the daemon and the QML plugin
@@ -33,6 +35,7 @@ set(HEALTH_METRICS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/metrics/healthData.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metrics/restingHr.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metrics/skinTemp.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metrics/goals.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/store/healthDb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/store/healthImport.cpp
 )
