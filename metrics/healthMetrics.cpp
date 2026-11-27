@@ -209,16 +209,32 @@ int floorsClimbed(const QList<QPointF> &pressure, const MinuteSeries &steps)
     static const int MIN_STEPS = 10;
     auto hpa = [](double v) { return v > 20000 ? v / 100.0 : v > 2000 ? v / 10.0 : v; };
     double gain = 0;
-    for (int i = 1; i < pressure.size(); i++) {
-        const qint64 t0 = (qint64)pressure[i - 1].x(), t1 = (qint64)pressure[i].x();
-        const double p0 = hpa(pressure[i - 1].y()), p1 = hpa(pressure[i].y());
-        if (t1 <= t0 || t1 - t0 > MAX_GAP_S || p0 < 300 || p1 < 300 || p0 > 1100 || p1 > 1100)
+    bool have = false;
+    qint64 lastT = 0;
+    double low = 0;   // the altitude a climb is measured from (metres relative to the first record)
+    double first = 0;
+    for (const QPointF &r : pressure) {
+        const qint64 t = (qint64)r.x();
+        const double p = hpa(r.y());
+        if (p < 300 || p > 1100)
+            continue; // not a pressure (a reading of 0)
+        if (!have) {
+            first = p;
+            low = 0;
+            lastT = t;
+            have = true;
             continue;
-        if (steps.stepsBetween(t0 * 1000, t1 * 1000) < MIN_STEPS)
-            continue;
-        const double dh = altitudeDifferenceM(p0, p1);
-        if (dh >= MIN_GAIN_M)
-            gain += dh;
+        }
+        const double h = altitudeDifferenceM(first, p);
+        const bool walked = t > lastT && t - lastT <= MAX_GAP_S &&
+                            steps.stepsBetween(lastT * 1000, t * 1000) >= MIN_STEPS;
+        lastT = t;
+        if (!walked || h < low) {
+            low = h; // no climb on foot (or down): the next one is measured from here
+        } else if (h - low >= MIN_GAIN_M) {
+            gain += h - low;
+            low = h;
+        }
     }
     return (int)std::floor(gain / FLOOR_M);
 }

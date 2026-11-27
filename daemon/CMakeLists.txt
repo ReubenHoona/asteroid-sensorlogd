@@ -11,6 +11,8 @@ add_executable(
     sensorPlugins/heartrateDb.h
     sensorPlugins/barometerSensor.cpp
     sensorPlugins/barometerSensor.h
+    sensorPlugins/activityStreams.cpp
+    sensorPlugins/activityStreams.h
     sensorPlugins/sampleTime.h
     healthMonitor.cpp
     healthMonitor.h

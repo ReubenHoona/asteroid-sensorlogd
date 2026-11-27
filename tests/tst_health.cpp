@@ -407,6 +407,40 @@ private slots:
         QCOMPARE(floorsClimbed({}, steps), 0);
     }
 
+    // a record a minute, as the barometer is recorded since the sensor hub batches it (WO-05)
+    void floorsFromMinuteRecords()
+    {
+        MinuteSeries steps;
+        fill(steps, THU, 9, 0, 60, 80, 0);
+        const double h0 = ms(THU, 9, 0) / 1000.0;
+        // pressure for an altitude (m) above 1013.25 hPa, in Pa
+        auto pa = [](double m) { return 101325.0 * std::pow(1.0 - m / 44330.0, 5.255); };
+        auto series = [&](const QList<double> &metres) {
+            QList<QPointF> p;
+            for (int i = 0; i < metres.size(); i++)
+                p << QPointF(h0 + 60.0 * i, pa(metres[i]));
+            return p;
+        };
+        // two floors climbed across three minutes (1.4 m, then 2.0 m, then 2.8 m): counted in full
+        QCOMPARE(floorsClimbed(series({0, 1.4, 3.4, 6.2, 6.2}), steps), 2);
+        // a ramp of 0.8 m a minute for ten minutes: 8 m, two floors (no minute alone is 1.5 m)
+        QList<double> ramp;
+        for (int i = 0; i <= 10; i++)
+            ramp << 0.8 * i;
+        QCOMPARE(floorsClimbed(series(ramp), steps), 2);
+        // up three floors and down again, twice: six
+        QCOMPARE(floorsClimbed(series({0, 9.5, 0, 9.5, 0}), steps), 6);
+        // the sensor's noise on the flat for an hour (+-0.3 m): none
+        QList<double> flat;
+        for (int i = 0; i < 60; i++)
+            flat << ((i * 7919) % 13 - 6) * 0.05;
+        QCOMPARE(floorsClimbed(series(flat), steps), 0);
+        // a lift: 12 m in two minutes without steps, then walking on: none
+        MinuteSeries lift;
+        fill(lift, THU, 9, 3, 10, 80, 0);
+        QCOMPARE(floorsClimbed(series({0, 6, 12, 12, 12.2, 12.1}), lift), 0);
+    }
+
     // ---- hourly activity ----
     void hourlyActivityCountsHoursOf250Steps()
     {

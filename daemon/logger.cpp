@@ -68,8 +68,13 @@ Logger::~Logger()
 }
 
 void Logger::sensorfwRegistered() {
-    if (m_setupDone)
+    if (m_setupDone) {
+        // a new sensorfwd: its hub connection knows nothing of us yet
+        qDebug() << sensorfwService << "is back";
+        if (m_activity)
+            m_activity->subscribe();
         return;
+    }
     qDebug() << sensorfwService << "is up";
     this->setup();
 }
@@ -83,6 +88,8 @@ void Logger::deletePlugins() {
     m_stepCounter = nullptr;
     delete m_barometerSensor;
     m_barometerSensor = nullptr;
+    delete m_activity;
+    m_activity = nullptr;
 }
 
 void Logger::setup() {
@@ -95,6 +102,7 @@ void Logger::setup() {
     heartrateSensorEnabled = this->settings->value("heartrateSensor/enabled",true).toBool();
     stepCounterEnabled = this->settings->value("stepCounter/enabled",true).toBool();
     barometerEnabled = this->settings->value("barometer/enabled",true).toBool();
+    const bool activityEnabled = this->settings->value("activity/enabled", true).toBool();
 
     // heart rate: one record per interval at rest (Wear OS-like, 5-10 min)
     if (heartrateSensorEnabled) {
@@ -105,9 +113,13 @@ void Logger::setup() {
         m_stepCounter = new StepCounterPlugin(this,settings->value("stepCounter/interval",600000).toInt(),daemonFresh);
     }
 
+    // pressure all the time, one record a minute (barometer/interval was the old reading period)
     if (barometerEnabled) {
-        m_barometerSensor = new BarometerSensorPlugin(this,settings->value("barometer/interval",600000).toInt());
+        m_barometerSensor = new BarometerSensorPlugin(this, settings->value("barometer/recordInterval", 60000).toInt());
     }
+
+    if (activityEnabled)
+        m_activity = new ActivityStreamsPlugin(this);
 
     m_health = new HealthMonitor(settings, &m_poster, this);
     m_health->setStore(m_store);
@@ -117,8 +129,6 @@ void Logger::setup() {
     m_health->start();
 
     qDebug() << "sensorlogd setup complete";
-    if (barometerEnabled)
-        m_barometerSensor->triggerRecording();
 }
 
 void Logger::resetup() {

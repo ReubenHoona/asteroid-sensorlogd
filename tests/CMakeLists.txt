@@ -45,6 +45,7 @@ add_library(sensorlogd-undertest STATIC
     ${top}/daemon/sensorPlugins/heartrateSensor.cpp ${top}/daemon/sensorPlugins/heartrateSensor.h
     ${top}/daemon/sensorPlugins/heartrateDb.cpp ${top}/daemon/sensorPlugins/heartrateDb.h
     ${top}/daemon/sensorPlugins/barometerSensor.cpp ${top}/daemon/sensorPlugins/barometerSensor.h
+    ${top}/daemon/sensorPlugins/activityStreams.cpp ${top}/daemon/sensorPlugins/activityStreams.h
     ${top}/qmlplugin/stepsDataLoader.cpp ${top}/qmlplugin/stepsDataLoader.h
     ${top}/qmlplugin/hrDataLoader.cpp ${top}/qmlplugin/hrDataLoader.h
     ${top}/qmlplugin/weightDataLoader.cpp ${top}/qmlplugin/weightDataLoader.h
@@ -74,8 +75,9 @@ endif()
 
 # tst_stepcounter and tst_logger test the timer-driven plugins from before the sensor hub's batches (108b628) and
 # are not built until they are brought up to it; tst_heartrate tests the batched heart rate and its database,
-# tst_store the health database and its one-time import, tst_api the daemon's D-Bus methods for it.
-foreach(name common heartrate barometer dataloaders health monitor healthloaders store api)
+# tst_store the health database and its one-time import, tst_api the daemon's D-Bus methods for it, tst_activity
+# the hub's motion and cadence streams (WO-05).
+foreach(name common heartrate barometer dataloaders health monitor healthloaders store api activity)
     add_executable(tst_${name} tst_${name}.cpp testenv.h peek.h)
     target_link_libraries(tst_${name} PRIVATE sensorlogd-undertest)
     if(SENSORLOGD_JUNIT_DIR)

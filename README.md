@@ -14,6 +14,15 @@ Every heart rate reading is also kept, with the time it was taken, in an SQLite 
 
 `time` is in milliseconds since the epoch (UTC), `accuracy` is the sensor's `QHrmSensor::Status` (1 unreliable to 4 high; readings without contact are not kept). A reading that arrives twice is kept once. Sensorlogd never deletes anything from it. The `heartrateMonitor` day files keep one median record per interval, as before.
 
+## Sensor hub streams (eos)
+On the eos sensor hub heart rate, steps, pressure and the motion streams are sampled by the hub all the time and batched there while the screen is off (45 minutes, one wake for all of them; the new streams are non-wake-up and come with the heart rate's batch), so nothing here wakes the system:
+
+* `barometer-raw`, `barometer-compensated`: one record a minute (`barometer/recordInterval`, ms), the median of the minute's readings in Pa, dated by its last reading (the sensor stays on; before, it was read every ten minutes while the system happened to be awake). Floors are counted from them (`metrics/healthMetrics.h`).
+* `motion`: a record when the state changes, `1` movement began, `0` stillness began (the hub's motion and stationary detect), `2` the detectors were armed again: what happened between the record before and this one was not watched (both detectors are one-shot; one that reported while the system slept is started again only when the system has its event).
+* `stepCadence`: a record a minute with steps, the minute's start and its mean cadence in steps a minute (the hub's step cadence, reported on change; a reading holds 60 s at most).
+
+They come from sensorfwd's hub connection (`org.eos.UsfHub` on the system bus: `SubscribeActivity()`, signal `ActivitySamples(i type, ax times_us, ad values)`), set `activity/enabled` to false to leave them off.
+
 ## Health database
 The records that are made once and may change later live in `health.db` (SQLite, WAL, `synchronous=FULL`), next to `heartrate.db`, with sensorlogd as the only writer (stock keeps the same in the Fitbit app's Room databases with one owner). Everybody else reads it with a connection of its own (`store/healthDb.h` has the C++ readers; `PRAGMA user_version` is the schema version, 2; a database of version 1 is given `workout_state` when the daemon opens it):
 

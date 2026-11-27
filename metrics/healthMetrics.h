@@ -111,8 +111,11 @@ double activeKcalForMinute(const Minute &minute, const HealthProfile &profile, i
 double energyKcal(const MinuteSeries &series, qint64 fromMs, qint64 toMs, const HealthProfile &profile, int restingHr);
 
 // Floors climbed from the barometer day file's records (time in seconds, pressure; Pa or hPa) and the steps:
-// the altitude gained between two readings that had steps between them, 3.048 m (10 ft) a floor. A gain
-// below 1.5 m is weather, not a climb. The barometer is read every ten minutes, so this is a coarse count.
+// the altitude gained while walking, 3.048 m (10 ft) a floor. Between two records with steps between them the
+// altitude is followed up from the lowest point since the last counted gain, and a rise of 1.5 m or more above it
+// counts (less is weather or the sensor's noise); records without steps between them (a lift, a car, sitting) or
+// more than 40 minutes apart start again from the later one. The barometer is recorded once a minute all the
+// time (the sensor hub batches it with the screen off), so a climb that spans records counts in full.
 int floorsClimbed(const QList<QPointF> &pressure, const MinuteSeries &steps);
 // the altitude difference in metres between two pressures in hPa (the barometric formula near sea level)
 double altitudeDifferenceM(double fromHpa, double toHpa);

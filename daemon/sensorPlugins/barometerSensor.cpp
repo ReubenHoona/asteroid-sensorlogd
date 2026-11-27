@@ -9,6 +9,8 @@
  */
 
 
+#include <algorithm>
+
 #include <QDateTime>
 #include <QTimer>
 #include <QtSensors/QPressureSensor>
@@ -20,75 +22,107 @@
 #include "../../common.h"
 
 #include "barometerSensor.h"
+#include "sampleTime.h"
 
-BarometerSensorPlugin::BarometerSensorPlugin(QObject *parent, int initInterval)  :
+BarometerSensorPlugin::BarometerSensorPlugin(QObject *parent, int recordInterval)  :
     QObject(parent){
-    interval = initInterval;
-
-    barometerSensor = new QPressureSensor(this);
-
-    barometerSensor->setAlwaysOn(true); // sensorfw stops sensors in standby (display off) otherwise
-    connect(barometerSensor,SIGNAL(readingChanged()),this,SLOT(finishRecording()));
+    m_interval = qMax(10000, recordInterval);
 
     setupFilePath(sensorPathPrefix);
     setupFilePath(sensorPathPrefixCompensated);
+    m_barometerOffsetGconf = new MGConfItem("/org/asteroidos/sensors/barometer-offset", this);
 
-    qDebug() << "barometer sensor is enabled. interval is (ms) " << interval;
-    m_barometerOffsetGconf = new MGConfItem("/org/asteroidos/sensors/barometer-offset");
-    recordIntervalTimer = new QTimer(this);
-    connect(recordIntervalTimer,SIGNAL(timeout()),this,SLOT(triggerRecording()));
+    // what is in today's file already is not written again (a restart; sensorfw replays the last reading)
+    const QStringList last = fileGetPrevRecord(sensorPathPrefix);
+    m_lastMs = last.value(0).toLongLong() * 1000;
+    if (m_lastMs > QDateTime::currentMSecsSinceEpoch())
+        m_lastMs = 0; // the clock went back
 
-    // give up on a recording that gets no usable reading (e.g. off the wrist)
-    // rather than keeping the sensor on until the next one
-    recordTimeoutTimer = new QTimer(this);
-    recordTimeoutTimer->setSingleShot(true);
-    recordTimeoutTimer->setInterval(10000);
-    connect(recordTimeoutTimer,SIGNAL(timeout()),this,SLOT(abortRecording()));
-    recordIntervalTimer->setSingleShot(true);
-    recordIntervalTimer->start(interval);
-    lastRecordTime = QDateTime::currentDateTime();
+    m_retryTimer = new QTimer(this);
+    m_retryTimer->setSingleShot(true);
+    connect(m_retryTimer, &QTimer::timeout, this, &BarometerSensorPlugin::retryStart);
+
+    qDebug() << "barometer sensor is enabled, one record per" << m_interval / 1000 << "s, all the time";
+    makeSensor();
+    startSensor();
 }
 
-void BarometerSensorPlugin::timeUpdate() {
-    uint elapsed = QDateTime::currentMSecsSinceEpoch() - lastRecordTime.toMSecsSinceEpoch();
-    if (m_measuring && elapsed > (uint)recordTimeoutTimer->interval())
-        abortRecording(); // its timeout did not run: the system was suspended
-    qDebug() << "time until next steps recording" << recordIntervalTimer->remainingTime() << " elapsed = " << elapsed << " lastRecordTime " << lastRecordTime.toMSecsSinceEpoch();
-    if (elapsed + 30000 > (uint)interval) { //if too much time has passed, reset the timer and record
-        triggerRecording();
-    } else { //otherwise, restart the timer and compensate for time spent in suspend
-        recordIntervalTimer->start(interval - elapsed);
-    }
+BarometerSensorPlugin::~BarometerSensorPlugin()
+{
+    writeInterval(); // what was collected so far is not lost on a restart
 }
 
-void BarometerSensorPlugin::triggerRecording() {
-    qDebug() << "barometer interval recording";
-    recordIntervalTimer->start(interval);
-    lastRecordTime = QDateTime::currentDateTime();
-    recordTimeoutTimer->start();
-    m_measuring = true;
-    barometerSensor->start();
+void BarometerSensorPlugin::makeSensor()
+{
+    delete barometerSensor;
+    barometerSensor = new QPressureSensor(this);
+    barometerSensor->setAlwaysOn(true); // sensorfw stops sensors in standby (display off) otherwise
+    connect(barometerSensor, &QSensor::readingChanged, this, &BarometerSensorPlugin::readingReceived);
 }
 
-void BarometerSensorPlugin::finishRecording() {
-    qDebug() << "barometer pressure update received";
-    int pressure = barometerSensor->reading()->pressure();
-    qDebug() << QDateTime::currentDateTime().toString("hh:mm:ss") << " : " << pressure << barometerSensor->isActive();
-    if (pressure == 0) {
-        qDebug() << "barometer sensor accuracy insufficient. waiting.";
+// QtSensors' sensorfw backend does not set a sensor up again once its first
+// set-up failed (sensorfwd not ready): a new one for every retry
+void BarometerSensorPlugin::startSensor()
+{
+    if (barometerSensor->start() && barometerSensor->isActive()) {
+        m_retryDelay = 30000;
         return;
     }
-    if (!m_measuring)
-        return; // a late sample after the recording ended
-    fileAddRecord(sensorPathPrefix,QString::number(pressure));
-    fileAddRecord(sensorPathPrefixCompensated,QString::number(pressure - m_barometerOffsetGconf->value(0).toInt()));
-    m_measuring = false;
-    recordTimeoutTimer->stop();
-    barometerSensor->stop();
+    qWarning() << "barometer did not start, retrying in" << m_retryDelay / 1000 << "s";
+    m_retryTimer->start(m_retryDelay);
+    m_retryDelay = qMin(m_retryDelay * 2, 30 * 60 * 1000);
 }
 
-void BarometerSensorPlugin::abortRecording() {
-    qDebug() << "no usable barometer reading, stopping until the next recording";
-    m_measuring = false;
-    barometerSensor->stop();
+void BarometerSensorPlugin::retryStart()
+{
+    makeSensor();
+    startSensor();
+}
+
+void BarometerSensorPlugin::timeUpdate()
+{
+    if (!barometerSensor->isActive() && !m_retryTimer->isActive())
+        retryStart();
+}
+
+void BarometerSensorPlugin::readingReceived()
+{
+    QPressureReading *reading = barometerSensor->reading();
+    if (!reading)
+        return;
+    const qint64 taken = readingWallMs(reading->timestamp());
+    const int pressure = (int)reading->pressure();
+    if (pressure <= 0)
+        return; // no usable reading (the sensor's accuracy)
+    if (taken <= m_lastMs)
+        return; // already looked at (a replay at a start, a reading out of order)
+    m_lastMs = taken;
+    const qint64 interval = taken / m_interval;
+    if (m_open >= 0 && interval != m_open)
+        writeInterval();
+    m_open = interval;
+    m_values.append(pressure);
+    m_openLastMs = taken;
+}
+
+void BarometerSensorPlugin::triggerRecording()
+{
+    writeInterval();
+}
+
+void BarometerSensorPlugin::writeInterval()
+{
+    if (m_values.isEmpty()) {
+        m_open = -1;
+        return;
+    }
+    QVector<int> v = m_values;
+    std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+    const int median = v[v.size() / 2];
+    const QDateTime at = QDateTime::fromMSecsSinceEpoch(m_openLastMs);
+    fileAddRecord(sensorPathPrefix, QString::number(median), at);
+    fileAddRecord(sensorPathPrefixCompensated, QString::number(median - m_barometerOffsetGconf->value(0).toInt()), at);
+    qDebug() << "barometer: record of" << m_values.size() << "readings";
+    m_values.clear();
+    m_open = -1;
 }

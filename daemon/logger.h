@@ -24,6 +24,7 @@
 #include "sensorPlugins/stepCounter.h"
 #include "sensorPlugins/heartrateSensor.h"
 #include "sensorPlugins/barometerSensor.h"
+#include "sensorPlugins/activityStreams.h"
 #include "healthMonitor.h"
 #include "healthNotifier.h"
 #include "../store/healthDb.h"
@@ -45,6 +46,9 @@
  * workouts (the Exercise app's, WO-02). After every write that changed it
  * the signal HealthChanged(x seq) goes out (the QML plugin's loaders read
  * again then); nothing is sent when nothing was written.
+ *
+ * The sensor hub's motion and cadence streams come through activityStreams.h
+ * (M4 WO-05), pressure all the time through barometerSensor.h.
  */
 class Logger : public QObject
 {
@@ -113,6 +117,7 @@ private:
     StepCounterPlugin *m_stepCounter = nullptr;
     bool barometerEnabled = false;
     BarometerSensorPlugin *m_barometerSensor = nullptr;
+    ActivityStreamsPlugin *m_activity = nullptr;
     DBusNotificationPoster m_poster;
     HealthMonitor *m_health = nullptr;
     Health::HealthDb *m_store = nullptr;
