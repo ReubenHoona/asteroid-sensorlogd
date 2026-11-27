@@ -86,6 +86,11 @@ int HealthMetricsLoader::stepGoal() const
     return qMax(1, MDConfItem("/org/asteroidos/ux/steps-goal").value(DEFAULT_STEPS_GOAL).toInt());
 }
 
+int HealthMetricsLoader::sleepGoal()
+{
+    return profile().sleepGoalMin;
+}
+
 QVariantMap HealthMetricsLoader::mainGoal()
 {
     if (m_goalKeys.isEmpty()) {

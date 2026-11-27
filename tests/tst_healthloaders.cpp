@@ -246,7 +246,9 @@ private slots:
         MGConfItem::setTestValue(P + "resting-hr", 50);
         QCOMPARE(loader.restingHr(), 50);
         QCOMPARE(loader.zones()[0].toMap()["startBpm"].toInt(), 50);
+        QCOMPARE(loader.sleepGoal(), 480);
         MGConfItem::setTestValue("/org/asteroidos/ux/sleep-goal", 420);
+        QCOMPARE(loader.sleepGoal(), 420); // R5 E-22
         QCOMPARE(profileSpy.count(), 7);
         QCOMPARE(dataSpy.count(), 7);
         MGConfItem::setTestValue(P + "height-cm", 190); // the same value: no change

@@ -82,6 +82,9 @@ public:
     // the day's resting heart rate, estimated once a day by the daemon (metrics/restingHr.h); -1: none
     Q_INVOKABLE int restingHrOf(QDate date);
     Q_INVOKABLE int maxHr();
+    // the sleep goal in force, minutes a night (the profile's: /org/asteroidos/ux/sleep-goal, 60 to 1440, else 480;
+    // a change is a profileChanged): the Health app's Sleep card and page show it (R5 E-22)
+    Q_INVOKABLE int sleepGoal();
     // the thresholds of the high and low heart rate alerts while the user has set none: stock's 120 and 50
     // (what the Health settings show then)
     Q_INVOKABLE int defaultHighBpm();
