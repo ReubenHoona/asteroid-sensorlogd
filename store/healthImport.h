@@ -41,8 +41,8 @@ namespace Health {
  * A unit (one file, one day) is one transaction: a stop between units loses nothing, a stop inside one loses
  * that unit's transaction only, and the next start goes through the phase again, skipping what is in.
  *
- * Until the Exercise app writes its workouts through sensorlogd (WO-02), importExerciseDays() takes the lines it
- * added since (the daemon calls it at start and when a workout ends: setWorkoutActive(false)).
+ * The Exercise app writes its workouts through sensorlogd's D-Bus methods since WO-02: its old log files are read
+ * here once, new lines are not taken in (it writes none).
  */
 class HealthImport
 {
@@ -69,9 +69,6 @@ public:
         int skipped = 0;  // malformed lines and files
     };
     const Counts &counts() const { return m_counts; }
-
-    // the lines of exercise/<day>.log for the days [from, to] that are not in health.db yet
-    int importExerciseDays(const QDate &from, const QDate &to);
 
     static int importSleepFile(HealthDb *db, const QString &root, const QString &fileName, int *skipped = nullptr);
     static int importExerciseFile(HealthDb *db, const QString &root, const QString &fileName, int *skipped = nullptr);

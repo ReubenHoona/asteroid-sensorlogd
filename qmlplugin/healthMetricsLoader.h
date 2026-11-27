@@ -16,6 +16,8 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include "../metrics/healthProfile.h"
+
 /*
  * The shared metrics module of the Health app and the launcher's tiles and complications (health-fitness-11):
  * distance, energy burned, floors, heart rate zones, Active Zone Minutes and hourly activity for a day, from
@@ -84,10 +86,21 @@ signals:
     void dataChanged();
 
 private slots:
-    void onHealthChanged(qlonglong) { emit dataChanged(); }
+    void onHealthChanged(qlonglong)
+    {
+        m_energyAt = 0;
+        emit dataChanged();
+    }
 
 private:
+    // minuteKcal(), restingKcal(): the profile and the resting heart rate in force, taken again after a minute or
+    // a write of the daemon (a workout asks every second, a batch of readings many times at once)
+    void takeEnergyContext();
+
     QFileSystemWatcher *m_fileWatcher;
+    Health::HealthProfile m_energyProfile;
+    int m_energyResting = 60;
+    qint64 m_energyAt = 0;
 };
 
 #endif // HEALTHMETRICSLOADER_H

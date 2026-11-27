@@ -797,7 +797,9 @@ private slots:
         QVERIFY(!HealthDb::readDaily(healthDbPath(), THU.addDays(3), nullptr));
     }
 
-    void aWorkoutTheExerciseAppLoggedComesInWhenItEnds()
+    // WO-02: the Exercise app writes through the D-Bus methods; a line added to its old log after the one-time
+    // import is not taken in, neither when a workout ends nor at the next start
+    void aLogLineAfterTheImportIsNotTakenIn()
     {
         HealthMonitor *m = make(ms(THU, 18, 0));
         QTRY_VERIFY(m->importDone());
@@ -807,14 +809,11 @@ private slots:
         QVERIFY(log.open(QIODevice::Append));
         log.write(QByteArray::number(ms(THU, 17, 15) / 1000) + ":2400:run:6000:400:150:170:7000\n");
         log.close();
-        QCOMPARE(HealthDb::readWorkouts(healthDbPath(), 0, ms(THU.addDays(1), 0)).size(), 0);
-        m->setWorkoutActive(false); // the app logged the line, then said so
-        const QList<WorkoutRecord> ws = HealthDb::readWorkouts(healthDbPath(), 0, ms(THU.addDays(1), 0));
-        QCOMPARE(ws.size(), 1);
-        QCOMPARE(ws[0].type, QString("run"));
-        QCOMPARE(ws[0].activeS, 2400);
         m->setWorkoutActive(false);
-        QCOMPARE(HealthDb::readWorkouts(healthDbPath(), 0, ms(THU.addDays(1), 0)).size(), 1);
+        QCOMPARE(HealthDb::readWorkouts(healthDbPath(), 0, ms(THU.addDays(1), 0)).size(), 0);
+        m = make(ms(THU, 19, 0));
+        QTRY_VERIFY(m->importDone());
+        QCOMPARE(HealthDb::readWorkouts(healthDbPath(), 0, ms(THU.addDays(1), 0)).size(), 0);
     }
 
     void noSleepIsEstimatedAtNightOrWithoutAHeartRate()

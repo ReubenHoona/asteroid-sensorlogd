@@ -154,17 +154,6 @@ int HealthImport::runAll()
     return units;
 }
 
-int HealthImport::importExerciseDays(const QDate &from, const QDate &to)
-{
-    int added = 0;
-    for (QDate d = from; d.isValid() && d <= to; d = d.addDays(1)) {
-        const QString name = d.toString("yyyy-MM-dd") + ".log";
-        if (QFile::exists(m_root + "exercise/" + name))
-            added += importExerciseFile(m_db, m_root, name);
-    }
-    return added;
-}
-
 int HealthImport::importSleepFile(HealthDb *db, const QString &root, const QString &fileName, int *skipped)
 {
     QFile file(root + "sleep/" + fileName);

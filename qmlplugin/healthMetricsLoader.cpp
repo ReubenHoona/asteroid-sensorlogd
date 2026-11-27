@@ -157,17 +157,32 @@ QVariantMap HealthMetricsLoader::daily(QDate date)
     return HealthDb::readDaily(healthDbPath(), date, &r) ? r.toMap() : QVariantMap();
 }
 
+void HealthMetricsLoader::takeEnergyContext()
+{
+    static const qint64 KEEP_MS = 60000;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_energyAt > 0 && now >= m_energyAt && now - m_energyAt < KEEP_MS)
+        return;
+    const Context c;
+    m_energyProfile = c.profile;
+    m_energyResting = c.resting;
+    m_energyAt = now;
+}
+
 double HealthMetricsLoader::minuteKcal(int steps, double bpm)
 {
-    const Context c;
+    takeEnergyContext();
     Minute m;
     m.steps = qMax(0, steps);
     m.hr = bpm > 0 ? bpm : 0;
     m.hrCount = bpm > 0 ? 1 : 0;
-    return activeKcalForMinute(m, c.profile, c.resting);
+    return activeKcalForMinute(m, m_energyProfile, m_energyResting);
 }
 
 double HealthMetricsLoader::restingKcal(double durationMs)
 {
-    return durationMs > 0 ? bmrKcalPerDay(HealthProfile::load()) * durationMs / 86400000.0 : 0;
+    if (!(durationMs > 0))
+        return 0;
+    takeEnergyContext();
+    return bmrKcalPerDay(m_energyProfile) * durationMs / 86400000.0;
 }

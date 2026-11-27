@@ -77,10 +77,16 @@ public slots:
                 const QString &kind);
     bool SetPaused(qlonglong id, bool paused, qlonglong atMs, bool automatic);
     // the end, with the summary (a{sv}): activeS, distanceM, kcal, steps, avgBpm, maxBpm, lightS, moderateS,
-    // vigorousS, peakS, azm, elevGainM; the workout is no longer going
+    // vigorousS, peakS, azm, elevGainM; the workout is no longer going (unless another one is on)
     bool EndWorkout(qlonglong id, qlonglong endMs, const QVariantMap &summary);
     // a tombstone: the row stays (marked deleted, for a sync), its track, laps and pauses go
     bool DeleteWorkout(qlonglong id);
+    // the snapshot of the workout that is on (the app's own text, for its recovery after a crash, a kill or a
+    // restart); the workout counts as going (setWorkoutActive), also after a restart of this daemon
+    bool SaveWorkoutState(qlonglong id, qlonglong atMs, const QString &state);
+    // the newest workout still on that began before beforeMs (one left by a run of the app that died): its
+    // fields (WorkoutLoader's) and savedMs, state, paused; {} if none
+    QVariantMap OpenWorkout(qlonglong beforeMs);
     // the change counter of health.db
     qlonglong HealthSeq();
     // how many rows of each kind health.db has, no values (HealthDb::readCounts): for checks on the watch

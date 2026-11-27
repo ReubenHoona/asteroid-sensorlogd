@@ -1,6 +1,6 @@
 // The daemon's D-Bus methods for health.db (daemon/logger.*: BeginWorkout, AddTrackPoints, AddLap, SetPaused,
-// EndWorkout, DeleteWorkout, HealthSeq and the signal HealthChanged), called over the session bus as the Exercise
-// app will (WO-02), and read back through the QML plugin's WorkoutLoader. The Logger runs without sensorfwd (it
+// SaveWorkoutState, OpenWorkout, EndWorkout, DeleteWorkout, HealthSeq and the signal HealthChanged), called over
+// the session bus as the Exercise app does (WO-02), and read back through the QML plugin's WorkoutLoader. The Logger runs without sensorfwd (it
 // waits for it), so only its health database is up. The workouts and fixes are invented.
 #include <QDBusConnection>
 #include <QDBusInterface>
@@ -160,7 +160,8 @@ private slots:
         QDBusReply<QVariantMap> counts = iface->call("HealthCounts");
         QVERIFY2(counts.isValid(), qPrintable(counts.error().message()));
         const QVariantMap c = counts.value();
-        QCOMPARE(c["schema"].toLongLong(), 1LL);
+        QCOMPARE(c["schema"].toLongLong(), (qlonglong)HealthDb::SCHEMA_VERSION);
+        QCOMPARE(c["workoutsOpen"].toLongLong(), 1LL); // the walk begun at 17:00
         QCOMPARE(c["seq"].toLongLong(), logger->HealthSeq());
         QCOMPARE(c["workouts"].toLongLong(), 1LL);
         QCOMPARE(c["workoutsDeleted"].toLongLong(), 1LL);
@@ -170,6 +171,51 @@ private slots:
         QCOMPARE(c["days"].toLongLong(), 0LL);
         for (auto it = c.constBegin(); it != c.constEnd(); ++it)
             QCOMPARE(it.value().typeId(), (int)QMetaType::LongLong);
+    }
+
+    // the Exercise app's snapshot of the workout that is on, and its recovery after the app died
+    void theSnapshotAndTheRecoveryOverTheBus()
+    {
+        QSignalSpy spy(logger, &Logger::HealthChanged);
+        QDBusReply<qlonglong> id = iface->call("BeginWorkout", (qlonglong)ms(SAT, 11, 0), QString("Hike"), QString("manual"), false);
+        QVERIFY(id.value() > 0);
+        QCOMPARE(spy.count(), 1);
+        const QString snapshot = "{\"w\":{\"type\":\"Hike\",\"state\":\"running\"},\"savedAt\":5}";
+        QDBusReply<bool> saved = iface->call("SaveWorkoutState", id.value(), (qlonglong)ms(SAT, 11, 20), snapshot);
+        QVERIFY2(saved.isValid(), qPrintable(saved.error().message()));
+        QVERIFY(saved.value());
+        QCOMPARE(spy.count(), 1); // not a change of the records: nobody is told
+        QVERIFY(QDBusReply<bool>(iface->call("SetPaused", id.value(), true, (qlonglong)ms(SAT, 11, 20), false)).value());
+        // a run of the app that began later finds it, with its snapshot
+        QDBusReply<QVariantMap> open = iface->call("OpenWorkout", (qlonglong)ms(SAT, 14, 0));
+        QVERIFY2(open.isValid(), qPrintable(open.error().message()));
+        const QVariantMap o = open.value();
+        QCOMPARE(o["id"].toLongLong(), id.value());
+        QCOMPARE(o["startMs"].toLongLong(), (qlonglong)ms(SAT, 11, 0));
+        QCOMPARE(o["type"].toString(), QString("Hike"));
+        QCOMPARE(o["savedMs"].toLongLong(), (qlonglong)ms(SAT, 11, 20));
+        QCOMPARE(o["state"].toString(), snapshot);
+        QCOMPARE(o["paused"].toBool(), true);
+        QCOMPARE(o["ended"].toBool(), false);
+        // one that began before it does not (the workout is its own)
+        QVERIFY(QDBusReply<QVariantMap>(iface->call("OpenWorkout", (qlonglong)ms(SAT, 11, 0))).value().isEmpty());
+        // ended where it was saved: nothing open any more, the snapshot gone
+        QVariantMap summary{{"activeS", 1200}, {"kcal", 110.5}};
+        QVERIFY(QDBusReply<bool>(iface->call("EndWorkout", id.value(), (qlonglong)ms(SAT, 11, 20), summary)).value());
+        QVERIFY(QDBusReply<QVariantMap>(iface->call("OpenWorkout", (qlonglong)ms(SAT, 14, 0))).value().isEmpty());
+        QVERIFY(!QDBusReply<bool>(iface->call("SaveWorkoutState", id.value(), (qlonglong)ms(SAT, 11, 21), snapshot)).value());
+        WorkoutRecord w;
+        QVERIFY(HealthDb::readWorkout(healthDbPath(), id.value(), &w));
+        QCOMPARE(w.endMs, ms(SAT, 11, 20));
+        QCOMPARE(w.activeS, 1200);
+        // one left without any snapshot (the app died at once) is discarded by it: a tombstone
+        QDBusReply<qlonglong> bare = iface->call("BeginWorkout", (qlonglong)ms(SAT, 12, 0), QString("Walk"), QString("manual"), false);
+        const QVariantMap b = QDBusReply<QVariantMap>(iface->call("OpenWorkout", (qlonglong)ms(SAT, 14, 0))).value();
+        QCOMPARE(b["id"].toLongLong(), bare.value());
+        QCOMPARE(b["savedMs"].toLongLong(), 0LL);
+        QVERIFY(b["state"].toString().isEmpty());
+        QVERIFY(QDBusReply<bool>(iface->call("DeleteWorkout", bare.value())).value());
+        QVERIFY(QDBusReply<QVariantMap>(iface->call("OpenWorkout", (qlonglong)ms(SAT, 14, 0))).value().isEmpty());
     }
 
     void badCallsAreRefusedAndChangeNothing()
@@ -182,6 +228,7 @@ private slots:
         QVERIFY(!QDBusReply<bool>(iface->call("SetPaused", 12345LL, true, 1LL, false)).value());
         QVERIFY(!QDBusReply<bool>(iface->call("EndWorkout", 12345LL, 2LL, QVariantMap())).value());
         QVERIFY(!QDBusReply<bool>(iface->call("DeleteWorkout", 12345LL)).value());
+        QVERIFY(!QDBusReply<bool>(iface->call("SaveWorkoutState", 12345LL, 1LL, QString("{}"))).value());
         QCOMPARE(logger->HealthSeq(), before);
         QCOMPARE(spy.count(), 0);
     }

@@ -2,8 +2,8 @@
 // version, the change sequence (every change counted, also across restarts; children change their parent),
 // tombstones, the workout, night and day writers, the readers (never make the file, see the last commit while a
 // write is open, do not block one), a process killed inside a transaction, and the import of the old files:
-// every record in, the same answers out, twice is once, an interrupted import resumes, the Exercise app's new
-// lines after it. All data is invented.
+// every record in, the same answers out, twice is once, an interrupted import resumes; version 2: the snapshot
+// of a workout that is on (WO-02) and the upgrade of a database of version 1. All data is invented.
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -197,8 +197,8 @@ private slots:
         }
         QCOMPARE(sqlNumber(path(), "PRAGMA user_version"), qint64(HealthDb::SCHEMA_VERSION));
         QCOMPARE(sqlText(path(), "PRAGMA journal_mode"), QString("wal"));
-        for (const char *table : {"meta", "workout", "workout_track", "workout_lap", "workout_pause", "sleep_session",
-                                  "sleep_stage", "daily", "spo2", "hrv", "skin_temp", "eda_event"}) {
+        for (const char *table : {"meta", "workout", "workout_track", "workout_lap", "workout_pause", "workout_state",
+                                  "sleep_session", "sleep_stage", "daily", "spo2", "hrv", "skin_temp", "eda_event"}) {
             const QByteArray q = QByteArray("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '")
                     + table + "'";
             QVERIFY2(sqlNumber(path(), q.constData()) == 1, table);
@@ -216,12 +216,12 @@ private slots:
         { HealthDb db(path()); QVERIFY(db.beginWorkout(ms(MON, 8), "walk") > 0); }
         sqlite3 *raw = nullptr;
         QCOMPARE(sqlite3_open(QFile::encodeName(path()).constData(), &raw), SQLITE_OK);
-        QCOMPARE(sqlite3_exec(raw, "PRAGMA user_version=2", nullptr, nullptr, nullptr), SQLITE_OK);
+        QCOMPARE(sqlite3_exec(raw, "PRAGMA user_version=3", nullptr, nullptr, nullptr), SQLITE_OK);
         sqlite3_close(raw);
-        QTest::ignoreMessage(QtWarningMsg, QRegularExpression("has schema 2"));
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression("has schema 3"));
         HealthDb db(path());
         QVERIFY(db.isOpen());
-        QCOMPARE(sqlNumber(path(), "PRAGMA user_version"), qint64(2));
+        QCOMPARE(sqlNumber(path(), "PRAGMA user_version"), qint64(3));
         QVERIFY(db.beginWorkout(ms(MON, 9), "run") > 0); // still written
     }
 
@@ -770,24 +770,93 @@ private slots:
         QCOMPARE(sqlNumber(path(), "SELECT COUNT(*) FROM daily WHERE closed_ms IS NOT NULL"), qint64(4));
     }
 
-    void theExerciseAppsNewLinesComeInAfterTheImport()
+    // ---- version 2: the snapshot of a workout that is on (WO-02) ----
+    void theSnapshotOfAWorkoutThatIsOn()
     {
         HealthDb db(path());
-        HealthImport import(&db, testenv::root(), totalsOf, restingOf, MON);
-        QTest::ignoreMessage(QtInfoMsg, QRegularExpression("0 nights"));
-        import.runAll(); // nothing old: done at once
-        QVERIFY(import.done());
-        appendExercise(MON, workoutLine(ms(MON, 7, 0), 600, "walk", 700, 40, 95, 104, 900));
-        QCOMPARE(import.importExerciseDays(MON.addDays(-1), MON), 1);
-        QCOMPARE(import.importExerciseDays(MON.addDays(-1), MON), 0); // once
-        appendExercise(MON, workoutLine(ms(MON, 12, 0), 300, "yoga", 0, 20, 80, 90, 0));
-        QCOMPARE(import.importExerciseDays(MON, MON), 1);
-        // a deleted one is not brought back by its line
-        const QList<WorkoutRecord> ws = HealthDb::readWorkouts(path(), 0, ms(MON.addDays(1), 0));
-        QCOMPARE(ws.size(), 2);
-        QVERIFY(db.deleteWorkout(ws.last().id));
-        QCOMPARE(import.importExerciseDays(MON, MON), 0);
-        QCOMPARE(HealthDb::readWorkouts(path(), 0, ms(MON.addDays(1), 0)).size(), 1);
+        QList<qint64> told;
+        db.setChangeHandler([&told](qint64 seq) { told << seq; });
+        const qint64 id = db.beginWorkout(ms(MON, 7, 0), "Run");
+        QVERIFY(id > 0);
+        QCOMPARE(told.size(), 1);
+        const qint64 seq = db.seq();
+        // none saved yet: on, without a snapshot
+        WorkoutRecord w;
+        qint64 saved = -1;
+        QString state = "x";
+        bool paused = true;
+        QVERIFY(HealthDb::readOpenWorkout(path(), ms(MON, 12, 0), &w, &saved, &state, &paused));
+        QCOMPARE(w.id, id);
+        QCOMPARE(w.type, QString("Run"));
+        QCOMPARE(saved, qint64(0));
+        QVERIFY(state.isEmpty());
+        QVERIFY(!paused);
+        // saved, then replaced: no change of seq, nobody told (a sync never reads it)
+        QVERIFY(db.saveWorkoutState(id, ms(MON, 7, 5), "{\"w\":1}"));
+        QVERIFY(db.saveWorkoutState(id, ms(MON, 7, 9), "{\"w\":2}"));
+        QCOMPARE(db.seq(), seq);
+        QCOMPARE(told.size(), 1);
+        QCOMPARE(sqlNumber(path(), "SELECT COUNT(*) FROM workout_state"), qint64(1));
+        QVERIFY(db.setPaused(id, ms(MON, 7, 9), true));
+        QVERIFY(HealthDb::readOpenWorkout(path(), ms(MON, 12, 0), &w, &saved, &state, &paused));
+        QCOMPARE(saved, ms(MON, 7, 9));
+        QCOMPARE(state, QString("{\"w\":2}"));
+        QVERIFY(paused);
+        // only workouts that began before the time asked for (a run of the app asks for the ones before it)
+        QVERIFY(!HealthDb::readOpenWorkout(path(), ms(MON, 7, 0), &w));
+        QCOMPARE(HealthDb::readCounts(path())["workoutsOpen"].toLongLong(), 1LL);
+        QCOMPARE(db.openWorkoutCount(), 1);
+        // bad values are refused
+        QVERIFY(!db.saveWorkoutState(id, 0, "{}"));
+        QVERIFY(!db.saveWorkoutState(id, ms(MON, 7, 10), QString()));
+        QVERIFY(!db.saveWorkoutState(id + 100, ms(MON, 7, 10), "{}"));
+        QVERIFY(!db.saveWorkoutState(id, ms(MON, 7, 10), QString(2 * 1024 * 1024, 'x')));
+        // the end takes the snapshot with it; an ended workout has none and takes none
+        WorkoutRecord s;
+        s.activeS = 540;
+        QVERIFY(db.endWorkout(id, ms(MON, 7, 30), s));
+        QCOMPARE(sqlNumber(path(), "SELECT COUNT(*) FROM workout_state"), qint64(0));
+        QVERIFY(!db.saveWorkoutState(id, ms(MON, 7, 31), "{}"));
+        QVERIFY(!HealthDb::readOpenWorkout(path(), ms(MON, 12, 0), &w));
+        QCOMPARE(db.openWorkoutCount(), 0);
+        // a deletion too
+        const qint64 other = db.beginWorkout(ms(MON, 9, 0), "Walk");
+        QVERIFY(db.saveWorkoutState(other, ms(MON, 9, 1), "{}"));
+        QVERIFY(db.deleteWorkout(other));
+        QCOMPARE(sqlNumber(path(), "SELECT COUNT(*) FROM workout_state"), qint64(0));
+        QVERIFY(!HealthDb::readOpenWorkout(path(), ms(MON, 12, 0), &w));
+        QCOMPARE(HealthDb::readCounts(path())["workoutsOpen"].toLongLong(), 0LL);
+    }
+
+    void aDatabaseOfVersion1IsUpgraded()
+    {
+        qint64 id = 0, seq = 0;
+        {
+            HealthDb db(path());
+            id = db.beginWorkout(ms(MON, 6, 0), "Walk");
+            QVERIFY(db.endWorkout(id, ms(MON, 6, 40), WorkoutRecord()));
+            QVERIFY(db.beginWorkout(ms(MON, 8, 0), "Run") > 0);
+            seq = db.seq();
+        }
+        // as WO-01 made it: no workout_state, version 1
+        sqlite3 *raw = nullptr;
+        QCOMPARE(sqlite3_open(QFile::encodeName(path()).constData(), &raw), SQLITE_OK);
+        QCOMPARE(sqlite3_exec(raw, "DROP TABLE workout_state; PRAGMA user_version=1", nullptr, nullptr, nullptr), SQLITE_OK);
+        sqlite3_close(raw);
+        QCOMPARE(sqlNumber(path(), "PRAGMA user_version"), qint64(1));
+        // a reader of the old version finds no snapshot, and no error
+        WorkoutRecord w;
+        QVERIFY(!HealthDb::readOpenWorkout(path(), ms(MON, 12, 0), &w));
+        HealthDb db(path());
+        QVERIFY(db.isOpen());
+        QCOMPARE(sqlNumber(path(), "PRAGMA user_version"), qint64(2));
+        QCOMPARE(sqlNumber(path(), "SELECT COUNT(*) FROM sqlite_master WHERE name = 'workout_state'"), qint64(1));
+        QCOMPARE(sqlNumber(path(), "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'"), qint64(4 * 2 + 4 * 3));
+        QCOMPARE(db.seq(), seq);
+        QCOMPARE(HealthDb::readWorkouts(path(), 0, ms(MON.addDays(1), 0)).size(), 2);
+        QVERIFY(HealthDb::readOpenWorkout(path(), ms(MON, 12, 0), &w));
+        QVERIFY(db.saveWorkoutState(w.id, ms(MON, 8, 1), "{}"));
+        QVERIFY(w.id != id);
     }
 };
 

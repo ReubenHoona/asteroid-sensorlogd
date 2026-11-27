@@ -401,6 +401,33 @@ private slots:
         QVERIFY(qAbs(sum - energyKcal(series, t0, t0 + 30 * 60000LL, p, 60)) < 1e-9);
     }
 
+    // The numbers of the neutral profile (170 cm, 70 kg, 30 years, no gender, resting 60): the same literals are in
+    // the Exercise app's tests/tst_energy.qml, so its test double of the formula is this one
+    void theEnergyNumbersOfTheNeutralProfile()
+    {
+        HealthMetricsLoader loader;
+        QVERIFY(qAbs(loader.minuteKcal(100, 0) - 2.4633) < 1e-4);   // walking: 0.5 kcal/kg/km, stride 0.7038 m
+        QVERIFY(qAbs(loader.minuteKcal(150, 0) - 7.3899) < 1e-4);   // running (140 a minute and up): 1.0
+        QVERIFY(qAbs(loader.minuteKcal(0, 150) - 10.8323) < 1e-4);  // vigorous: gross 11.8979 less resting 1.0656
+        QVERIFY(qAbs(loader.minuteKcal(0, 120) - 6.9672) < 1e-4);   // moderate
+        QCOMPARE(loader.minuteKcal(0, 100), 0.0);                     // light: nothing above resting
+        QVERIFY(qAbs(loader.minuteKcal(150, 150) - 10.8323) < 1e-4); // the larger of the two
+        QVERIFY(qAbs(loader.minuteKcal(150, 100) - 7.3899) < 1e-4);
+        QVERIFY(qAbs(loader.restingKcal(60000) - 1.065625) < 1e-6);  // 1534.5 kcal a day
+    }
+
+    // the formula's profile and resting rate are taken once a minute, and again when the daemon wrote
+    void theEnergyContextIsTakenAgainAfterADaemonWrite()
+    {
+        HealthMetricsLoader loader;
+        const double neutral = loader.restingKcal(3600000);
+        profileMale175();
+        QCOMPARE(loader.restingKcal(3600000), neutral);
+        QVERIFY(QMetaObject::invokeMethod(&loader, "onHealthChanged", Q_ARG(qlonglong, 7)));
+        QCOMPARE(loader.restingKcal(3600000), bmrKcalPerDay(HealthProfile::load()) * 3600000 / 86400000.0);
+        QVERIFY(loader.restingKcal(3600000) != neutral);
+    }
+
     void theLoadersReadAgainWhenTheDaemonWrites()
     {
         SleepDataLoader sleep;

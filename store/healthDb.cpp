@@ -83,6 +83,15 @@ const char *const SCHEMA_V1[] = {
     "CREATE INDEX IF NOT EXISTS eda_event_seq ON eda_event (seq)",
 };
 
+// version 2: the snapshot of the workout that is on (WO-02); not a record, so no seq and no trigger
+const char *const SCHEMA_V2[] = {
+    "CREATE TABLE IF NOT EXISTS workout_state (workout_id INTEGER PRIMARY KEY, saved_ms INTEGER NOT NULL, "
+    "state TEXT NOT NULL)",
+};
+
+// a snapshot is a few kB; anything far larger is not one
+const int MAX_STATE_CHARS = 1 << 20;
+
 // the triggers of the change sequence
 QStringList seqTriggers()
 {
@@ -344,15 +353,19 @@ bool HealthDb::setUp()
     }
     if (version == SCHEMA_VERSION)
         return true;
-    // a new database (0): the schema in one transaction, then its version
+    // a new database (0): the schema in one transaction, then its version; one of version 1: what 2 adds
     if (!exec("BEGIN IMMEDIATE"))
         return false;
     bool ok = true;
-    for (const char *sql : SCHEMA_V1)
+    if (version < 1) {
+        for (const char *sql : SCHEMA_V1)
+            ok = ok && exec(sql);
+        for (const QString &sql : seqTriggers())
+            ok = ok && exec(sql.toUtf8().constData());
+    }
+    for (const char *sql : SCHEMA_V2)
         ok = ok && exec(sql);
-    for (const QString &sql : seqTriggers())
-        ok = ok && exec(sql.toUtf8().constData());
-    ok = ok && exec("PRAGMA user_version=1");
+    ok = ok && exec(QByteArray("PRAGMA user_version=" + QByteArray::number(SCHEMA_VERSION)).constData());
     if (ok && exec("COMMIT"))
         return true;
     exec("ROLLBACK");
@@ -608,6 +621,10 @@ bool HealthDb::endWorkout(qint64 id, qint64 endMs, const WorkoutRecord &s)
                 .bind(11, qMax(0, s.peakS)).bind(12, qMax(0, s.azm)).bind(13, qMax(0.0, s.elevGainM)).bind(14, id)
                 .bind(15, endMs);
         ok = pause.ok() && pause.run() && q.ok() && q.run() && sqlite3_changes(m_db) == 1;
+        // the snapshot of the workout that was on is not needed any more
+        Stmt state(m_db, "DELETE FROM workout_state WHERE workout_id = ?");
+        state.bind(1, id);
+        ok = ok && state.ok() && state.run();
     }
     if (!ok) {
         rollback();
@@ -626,7 +643,7 @@ bool HealthDb::deleteWorkout(qint64 id)
     q.bind(1, id);
     bool ok = q.ok() && q.run() && sqlite3_changes(m_db) == 1;
     for (const char *sql : {"DELETE FROM workout_track WHERE workout_id = ?", "DELETE FROM workout_lap WHERE workout_id = ?",
-                            "DELETE FROM workout_pause WHERE workout_id = ?"}) {
+                            "DELETE FROM workout_pause WHERE workout_id = ?", "DELETE FROM workout_state WHERE workout_id = ?"}) {
         if (!ok)
             break;
         Stmt d(m_db, sql);
@@ -638,6 +655,34 @@ bool HealthDb::deleteWorkout(qint64 id)
         return false;
     }
     return commit(before);
+}
+
+bool HealthDb::saveWorkoutState(qint64 id, qint64 savedMs, const QString &state)
+{
+    if (savedMs <= 0 || state.isEmpty() || state.size() > MAX_STATE_CHARS)
+        return false;
+    const qint64 before = seq();
+    if (!begin())
+        return false;
+    if (!workoutIsOpen(id)) {
+        rollback();
+        return false;
+    }
+    Stmt q(m_db, "INSERT OR REPLACE INTO workout_state (workout_id, saved_ms, state) VALUES (?, ?, ?)");
+    q.bind(1, id).bind(2, savedMs).bind(3, state);
+    if (!q.ok() || !q.run()) {
+        rollback(true);
+        return false;
+    }
+    return commit(before);
+}
+
+int HealthDb::openWorkoutCount()
+{
+    if (!open())
+        return 0;
+    Stmt q(m_db, "SELECT COUNT(*) FROM workout WHERE end_ms IS NULL AND deleted = 0");
+    return q.ok() && q.row() ? q.i(0) : 0;
 }
 
 bool HealthDb::importWorkout(const WorkoutRecord &w)
@@ -783,6 +828,7 @@ QVariantMap HealthDb::readCounts(const QString &path)
         {"workouts", "SELECT COUNT(*) FROM workout WHERE deleted = 0"},
         {"workoutsDeleted", "SELECT COUNT(*) FROM workout WHERE deleted = 1"},
         {"workoutsImported", "SELECT COUNT(*) FROM workout WHERE imported_from IS NOT NULL"},
+        {"workoutsOpen", "SELECT COUNT(*) FROM workout WHERE end_ms IS NULL AND deleted = 0"},
         {"trackPoints", "SELECT COUNT(*) FROM workout_track"},
         {"laps", "SELECT COUNT(*) FROM workout_lap"},
         {"pauses", "SELECT COUNT(*) FROM workout_pause"},
@@ -851,6 +897,30 @@ bool HealthDb::readWorkout(const QString &path, qint64 id, WorkoutRecord *workou
         while (p.ok() && p.row())
             pauses->append({p.i64(0), p.isNull(1) ? 0 : p.i64(1), p.i(2) != 0});
     }
+    return true;
+}
+
+bool HealthDb::readOpenWorkout(const QString &path, qint64 beforeMs, WorkoutRecord *workout, qint64 *savedMs,
+                               QString *state, bool *paused)
+{
+    ReadConn c(path);
+    const QByteArray sql = QByteArray("SELECT ") + WORKOUT_COLUMNS
+            + ", (SELECT saved_ms FROM workout_state WHERE workout_id = workout.id)"
+              ", (SELECT state FROM workout_state WHERE workout_id = workout.id)"
+              ", EXISTS (SELECT 1 FROM workout_pause WHERE workout_id = workout.id AND end_ms IS NULL)"
+              " FROM workout WHERE end_ms IS NULL AND deleted = 0 AND start_ms < ? ORDER BY start_ms DESC LIMIT 1";
+    Stmt q(c.db(), sql.constData());
+    q.bind(1, beforeMs);
+    if (!q.ok() || !q.row())
+        return false;
+    if (workout)
+        *workout = workoutFrom(q);
+    if (savedMs)
+        *savedMs = q.isNull(21) ? 0 : q.i64(21);
+    if (state)
+        *state = q.s(22);
+    if (paused)
+        *paused = q.i(23) != 0;
     return true;
 }
 

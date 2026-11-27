@@ -124,8 +124,6 @@ void HealthMonitor::start()
         }
         QMetaObject::invokeMethod(this, "importStep", Qt::QueuedConnection);
     } else {
-        // workouts the Exercise app logged while the daemon was not running
-        m_import->importExerciseDays(m_day.addDays(-2), m_day);
         closeDays();
     }
 }
@@ -145,8 +143,6 @@ void HealthMonitor::importStep()
     if (!m_import->done())
         return; // could not be marked: the next start goes on
     m_restingEstimate = estimatedRestingHr(now());
-    const QDate today = QDateTime::fromMSecsSinceEpoch(now()).date();
-    m_import->importExerciseDays(today.addDays(-2), today);
     closeDays();
 }
 
@@ -165,12 +161,8 @@ void HealthMonitor::attach(StepCounterPlugin *steps, HeartrateSensorPlugin *hear
 
 void HealthMonitor::setWorkoutActive(bool active)
 {
+    // (the Exercise app's workouts come through the daemon's D-Bus methods since WO-02: no log lines to take in)
     m_workoutActive = active;
-    // a workout ended: the Exercise app logged it before it said so (until it writes through sensorlogd, WO-02)
-    if (!active && m_import && m_import->done()) {
-        const QDate today = QDateTime::fromMSecsSinceEpoch(now()).date();
-        m_import->importExerciseDays(today.addDays(-1), today);
-    }
 }
 
 void HealthMonitor::batchSettled()

@@ -33,7 +33,7 @@ namespace Health {
  * Room databases with one owner (passive_stats.db: ExerciseSummary, ExerciseGps, ExerciseSplitAnnotation,
  * LocalSleepPeriods, ...); here the owner, and the only writer, is sensorlogd. Everybody else reads.
  *
- * Schema (PRAGMA user_version 1; README.md has the columns):
+ * Schema (PRAGMA user_version 2; README.md has the columns):
  *   meta          key/value: 'seq' (the change counter), 'import.<phase>' (the one-time import, healthImport.h)
  *   workout       one row a workout: start_ms (unique), end_ms (NULL while it is on), active_s, type, distance_m,
  *                 kcal, steps, avg_bpm, max_bpm, light_s, moderate_s, vigorous_s, peak_s, azm, elev_gain_m,
@@ -41,6 +41,9 @@ namespace Health {
  *   workout_track (workout_id, t_ms, lat_e7, lon_e7, alt_dm, hacc_dm, speed_cms)
  *   workout_lap   (workout_id, n, start_ms, end_ms, distance_m, avg_bpm, kind: split-km, split-mile, manual)
  *   workout_pause (workout_id, start_ms, end_ms, auto)
+ *   workout_state (workout_id, saved_ms, state)  version 2: the snapshot of a workout that is on, as the Exercise
+ *                 app saved it (its own text, for its recovery after a crash, a kill or a restart); gone at the
+ *                 workout's end; not a record (no seq, a sync never reads it)
  *   sleep_session one row a session: wake_date (the morning of the night, local ISO date), start_ms, end_ms,
  *                 main, asleep_min, awake_min, rem_min, light_min, deep_min, score, goal_min, avg_hr, spo2_avg,
  *                 spo2_min, spo2_max, temp_dev_c, resp_rate, hrv_rmssd, algo, imported_from, seq, deleted
@@ -133,7 +136,7 @@ struct ChangePage {
 class HealthDb
 {
 public:
-    static const int SCHEMA_VERSION = 1;
+    static const int SCHEMA_VERSION = 2;
 
     // The writer (sensorlogd): opens or makes the database and its schema
     explicit HealthDb(const QString &path);
@@ -165,6 +168,11 @@ public:
     // the end and the summary numbers of a workout that is on (an open pause ends with it)
     bool endWorkout(qint64 id, qint64 endMs, const WorkoutRecord &summary);
     bool deleteWorkout(qint64 id);
+    // the snapshot of a workout that is on (the Exercise app's own text): replaced at every save, gone at the end or
+    // the deletion; seq does not change (nothing a sync reads). False if the workout is not on.
+    bool saveWorkoutState(qint64 id, qint64 savedMs, const QString &state);
+    // the workouts that are on (no end, not deleted)
+    int openWorkoutCount();
     // a finished workout of the old log: false if one with that start is there (also a deleted one)
     bool importWorkout(const WorkoutRecord &w);
 
@@ -184,7 +192,7 @@ public:
     static qint64 readSeq(const QString &path);
     static QVariant readMeta(const QString &path, const QString &key);
     // How many rows of each kind, no values (for checks on the watch): schema, seq, workouts, workoutsDeleted,
-    // workoutsImported, trackPoints, laps, pauses, nights, sleepSessions, sleepImported, days, daysClosed,
+    // workoutsImported, workoutsOpen, trackPoints, laps, pauses, nights, sleepSessions, sleepImported, days, daysClosed,
     // daysResting, and import.sleep, import.exercise, import.resting, import.daily (1: done). {} without a database.
     static QVariantMap readCounts(const QString &path);
     // the workouts that began in [fromMs, toMs), newest first (deleted ones left out)
@@ -192,6 +200,10 @@ public:
     static bool readWorkout(const QString &path, qint64 id, WorkoutRecord *workout, QVector<LapRecord> *laps = nullptr,
                             QVector<PauseRecord> *pauses = nullptr);
     static QVector<TrackPoint> readTrack(const QString &path, qint64 id);
+    // The newest workout that is still on and began before beforeMs, with its snapshot (savedMs 0 and an empty state:
+    // none was saved; paused: a pause of it is open); false if there is none
+    static bool readOpenWorkout(const QString &path, qint64 beforeMs, WorkoutRecord *workout, qint64 *savedMs = nullptr,
+                                QString *state = nullptr, bool *paused = nullptr);
     // the night that ended on wakeDate, as the sleep estimator made it; false if none is stored
     static bool readNight(const QString &path, const QDate &wakeDate, SleepNight *night);
     static bool readDaily(const QString &path, const QDate &date, DailyRecord *record);

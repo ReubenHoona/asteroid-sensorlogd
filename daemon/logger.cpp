@@ -208,7 +208,10 @@ bool Logger::AddLap(qlonglong id, int n, qlonglong startMs, qlonglong endMs, dou
 }
 
 bool Logger::SetPaused(qlonglong id, bool paused, qlonglong atMs, bool automatic) {
-    return m_store->setPaused(id, atMs, paused, automatic);
+    const bool ok = m_store->setPaused(id, atMs, paused, automatic);
+    if (ok)
+        setWorkoutActive(true);
+    return ok;
 }
 
 bool Logger::EndWorkout(qlonglong id, qlonglong endMs, const QVariantMap &summary) {
@@ -227,12 +230,36 @@ bool Logger::EndWorkout(qlonglong id, qlonglong endMs, const QVariantMap &summar
     s.elevGainM = summary.value("elevGainM").toDouble();
     const bool ok = m_store->endWorkout(id, endMs, s);
     if (ok)
-        setWorkoutActive(false);
+        setWorkoutActive(m_store->openWorkoutCount() > 0);
     return ok;
 }
 
 bool Logger::DeleteWorkout(qlonglong id) {
-    return m_store->deleteWorkout(id);
+    const bool ok = m_store->deleteWorkout(id);
+    if (ok)
+        setWorkoutActive(m_store->openWorkoutCount() > 0);
+    return ok;
+}
+
+bool Logger::SaveWorkoutState(qlonglong id, qlonglong atMs, const QString &state) {
+    const bool ok = m_store->saveWorkoutState(id, atMs, state);
+    if (ok)
+        setWorkoutActive(true);
+    return ok;
+}
+
+QVariantMap Logger::OpenWorkout(qlonglong beforeMs) {
+    Health::WorkoutRecord w;
+    qint64 savedMs = 0;
+    QString state;
+    bool paused = false;
+    if (!Health::HealthDb::readOpenWorkout(m_store->path(), beforeMs, &w, &savedMs, &state, &paused))
+        return QVariantMap();
+    QVariantMap m = w.toMap();
+    m.insert("savedMs", (qlonglong)savedMs);
+    m.insert("state", state);
+    m.insert("paused", paused);
+    return m;
 }
 
 qlonglong Logger::HealthSeq() {
