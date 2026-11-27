@@ -71,6 +71,7 @@ void HealthMonitor::reloadSettings()
     s.hrAlerts.lowEnabled = m_settings->value("hrAlerts/lowEnabled", true).toBool();
     s.hrAlerts.low = m_settings->value("hrAlerts/lowBpm", 0).toInt();
     s.exercise.start = m_settings->value("autoExercise/start", true).toBool();
+    s.hrCheckMin = qBound(0, m_settings->value("hrAlerts/checkMinutes", HR_CHECK_MIN).toInt(), 24 * 60);
     m_config = s;
     m_profileAt = 0; // the profile too may have changed
     armReminderTimer();
@@ -164,11 +165,60 @@ void HealthMonitor::setWorkoutActive(bool active)
 {
     // (the Exercise app's workouts come through the daemon's D-Bus methods since WO-02: no log lines to take in)
     m_workoutActive = active;
+    // no heart rate checks of the monitor's own during a workout (its latency is 10 s, WO-08); again after it
+    armReminderTimer();
 }
 
 void HealthMonitor::batchSettled()
 {
+    m_wakeAwaitingBatch = false;
     m_settle->start(SETTLE_MS);
+}
+
+void HealthMonitor::setWake(HealthWake *wake)
+{
+    m_wake = wake;
+    if (!m_wake)
+        return;
+    m_reminderTimer->stop();
+    if (!m_wakeGuard) {
+        m_wakeGuard = new QTimer(this);
+        m_wakeGuard->setSingleShot(true);
+        connect(m_wakeGuard, &QTimer::timeout, this, &HealthMonitor::wakeTimedOut);
+    }
+    connect(m_wake, &HealthWake::woke, this, &HealthMonitor::woke);
+    connect(m_wake, &HealthWake::flushed, this, &HealthMonitor::hubFlushed);
+}
+
+// The system is up for the monitor's own look (R5 E-04): the hub hands over its batch first, so the look sees the
+// minutes up to now; held awake until evaluate() is through (armReminderTimer releases it)
+void HealthMonitor::woke()
+{
+    m_inWake = true;
+    m_wakeAwaitingBatch = false;
+    m_wakeAt = -1;
+    m_wakeGuard->start(WAKE_MAX_MS);
+    m_wake->flushHub();
+}
+
+void HealthMonitor::hubFlushed(int samplings)
+{
+    if (!m_inWake)
+        return;
+    if (samplings > 0) {
+        // the readings come as a batch: its batchSettled looks at them (the guard if none comes)
+        m_wakeAwaitingBatch = true;
+        return;
+    }
+    // nothing waits on the hub (the display is on: all of it is live) or no answer: what there is
+    evaluate();
+}
+
+void HealthMonitor::wakeTimedOut()
+{
+    m_wakeAwaitingBatch = false;
+    if (m_inWake)
+        evaluate();
 }
 
 void HealthMonitor::displayOn()
@@ -225,6 +275,7 @@ QString HealthMonitor::clockText(qint64 ms) const
 void HealthMonitor::evaluate()
 {
     const qint64 t = now();
+    m_lastLookMs = t;
     rollDay(QDateTime::fromMSecsSinceEpoch(t).date());
     loadProfile();
 
@@ -268,9 +319,62 @@ qint64 HealthMonitor::nextReminderMs() const
     return MoveReminder::nextReminderMs(now(), m_config.reminders);
 }
 
+bool HealthMonitor::hrChecksWanted(qint64 nowMs) const
+{
+    return m_config.hrCheckMin > 0 && m_hrAttached && !m_workoutActive
+           && (m_config.hrAlerts.highEnabled || m_config.hrAlerts.lowEnabled) && worn(nowMs);
+}
+
+qint64 HealthMonitor::nextWakeMs(int *slackMs) const
+{
+    const qint64 t = now();
+    qint64 next = -1;
+    int slack = 0;
+    auto take = [&](qint64 at, int s) {
+        if (at < 0)
+            return;
+        at = qMax(at, t + WAKE_MIN_MS);
+        if (next < 0 || at < next) {
+            next = at;
+            slack = s;
+        }
+    };
+    // the reminder minute (a reminder is no use off the wrist: MoveReminder::evaluate does not make one there)
+    if (m_config.reminders.enabled && worn(t))
+        take(MoveReminder::nextReminderMs(t, m_config.reminders), WAKE_SLACK_MS);
+    if (hrChecksWanted(t)) {
+        take((m_lastLookMs > 0 ? m_lastLookMs : t) + (qint64)m_config.hrCheckMin * 60000, CHECK_SLACK_MS);
+        // a run under way: when its 10th minute is over
+        const qint64 due = m_alerts.dueMs();
+        if (due >= 0)
+            take(due + WAKE_DUE_MARGIN_MS, WAKE_SLACK_MS);
+    }
+    if (slackMs)
+        *slackMs = slack;
+    return next;
+}
+
+// The next look of the monitor's own: by its wake (R5 E-04; and the running wake, if any, released: the look is
+// done), else the reminder minute's single-shot QTimer (awake time only)
 void HealthMonitor::armReminderTimer()
 {
     m_reminderTimer->stop();
+    if (m_wake) {
+        // not released while the flushed batch is on its way or about to be looked at: that look releases it
+        const bool release = m_inWake && !m_wakeAwaitingBatch && !m_settle->isActive();
+        int slack = 0;
+        const qint64 next = nextWakeMs(&slack);
+        if (release || next != m_wakeAt) {
+            m_wakeAt = next;
+            m_wake->schedule(next, slack);
+        }
+        if (release) {
+            m_inWake = false;
+            m_wakeGuard->stop();
+            m_wake->release();
+        }
+        return;
+    }
     const qint64 next = nextReminderMs();
     if (next < 0)
         return;

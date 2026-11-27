@@ -14,8 +14,11 @@
 #include <QSignalSpy>
 #include <QTest>
 
+#include <keepalive/backgroundactivity.h>
+
 #include "peek.h"
 #include "../common.h"
+#include "../daemon/keepaliveWake.h"
 #include "../metrics/healthData.h"
 #include "../metrics/restingHr.h"
 #include "../store/healthDb.h"
@@ -48,6 +51,20 @@ public:
     }
 };
 
+// the monitor's wake (R5 E-04) as the tests drive it: what was asked of it; the test makes the time come
+class FakeWake : public HealthWake
+{
+public:
+    QList<QPair<qint64, int>> schedules;
+    int releases = 0;
+    int flushes = 0;
+    void schedule(qint64 atMs, int slackMs) override { schedules << qMakePair(atMs, slackMs); }
+    void release() override { releases++; }
+    void flushHub() override { flushes++; }
+    qint64 at() const { return schedules.isEmpty() ? -2 : schedules.last().first; }
+    int slack() const { return schedules.isEmpty() ? -2 : schedules.last().second; }
+};
+
 QJsonObject healthJson(const HealthNotification &n)
 {
     return QJsonDocument::fromJson(n.hints.value("x-asteroid-health").toString().toUtf8()).object();
@@ -73,6 +90,22 @@ class TestMonitor : public QObject
         clock = startAt;
         monitor.reset(new HealthMonitor(settings, &poster));
         monitor->setClock([this] { return clock; });
+        monitor->start();
+        return monitor.data();
+    }
+
+    FakeWake wake;
+    HealthMonitor *makeWithWake(qint64 startAt)
+    {
+        monitor.reset();
+        wake.schedules.clear();
+        wake.releases = 0;
+        wake.flushes = 0;
+        clock = startAt;
+        monitor.reset(new HealthMonitor(settings, &poster));
+        monitor->setClock([this] { return clock; });
+        monitor->setWake(&wake);
+        monitor->m_hrAttached = true; // as attach() with the daemon's heart rate plugin: worn() from its readings
         monitor->start();
         return monitor.data();
     }
@@ -764,6 +797,223 @@ private slots:
         QVERIFY(!m->m_settle->isActive());
         QVERIFY(!m->m_reminderTimer->isActive());
         monitor.reset(); // before the store goes
+    }
+
+    // ---- the monitor's own wake (R5 E-04) ----
+    // stock wakes for the minute-50 reminder (an exact RTC wakeup alarm) and has the hub's alert events; here the
+    // wake carries the reminder minute and a heart rate check 15 minutes after the last look, whichever is first
+    void theWakeCarriesTheReminderMinuteAndTheChecks()
+    {
+        settings->setValue("reminders/enabled", true);
+        HealthMonitor *m = makeWithWake(ms(THU, 10, 0));
+        heart(THU, 10, 0, 12, 70);
+        clock = ms(THU, 10, 12);
+        m->evaluate();
+        QVERIFY(!m->m_reminderTimer->isActive()); // the wake has it
+        QCOMPARE(wake.at(), ms(THU, 10, 27));     // the check before the reminder minute
+        QCOMPARE(wake.slack(), (int)HealthMonitor::CHECK_SLACK_MS);
+        // the alerts off: the reminder minute, as exact as stock's alarm
+        settings->setValue("hrAlerts/highEnabled", false);
+        settings->setValue("hrAlerts/lowEnabled", false);
+        m->reloadSettings();
+        QCOMPARE(wake.at(), ms(THU, 10, 50));
+        QCOMPARE(wake.slack(), (int)HealthMonitor::WAKE_SLACK_MS);
+        // and nothing else asks for one: no wake
+        settings->setValue("reminders/enabled", false);
+        m->reloadSettings();
+        QCOMPARE(wake.at(), qint64(-1));
+        QCOMPARE(m->findChildren<QTimer *>().size(), 3); // the settle, the reminder (idle) and the wake's guard
+        QVERIFY(!m->m_wakeGuard->isActive());
+    }
+
+    void aWakeFlushesTheHubAndLooksOnceTheBatchIsIn()
+    {
+        settings->setValue("reminders/enabled", true);
+        HealthMonitor *m = makeWithWake(ms(THU, 10, 0));
+        heart(THU, 10, 0, 35, 70);
+        steps(THU, 10, 0, 10, 10);
+        clock = ms(THU, 10, 35);
+        m->evaluate();
+        QCOMPARE(wake.at(), ms(THU, 10, 50)); // the check would be 10:50 too
+        const int scheduled = wake.schedules.size();
+        // the time comes, in a pocket: the hub has 15 minutes in its FIFO
+        clock = ms(THU, 10, 50, 1);
+        emit wake.woke();
+        QCOMPARE(wake.flushes, 1);
+        QVERIFY(m->m_inWake);
+        QVERIFY(poster.posted.isEmpty()); // nothing is looked at before the batch
+        emit wake.flushed(2);
+        QCOMPARE(wake.releases, 0);
+        heart(THU, 10, 35, 15, 72);
+        m->batchSettled();
+        QTRY_COMPARE(wake.releases, 1);
+        QVERIFY(!m->m_inWake);
+        QCOMPARE(poster.posted.size(), 1);
+        QCOMPARE(poster.posted[0].summary, QString("Reminder to move"));
+        QCOMPARE(poster.posted[0].body, QString("150 steps left\nthis hour"));
+        // the next: the check 15 minutes after this look (before 11:50)
+        QVERIFY(wake.schedules.size() > scheduled);
+        QCOMPARE(wake.at(), ms(THU, 11, 5, 1));
+    }
+
+    void aRunUnderWayIsLookedAtWhenItsTenthMinuteIsOver()
+    {
+        HealthMonitor *m = makeWithWake(ms(THU, 13, 59));
+        heart(THU, 14, 0, 5, 131); // five minutes over 120 at the last look
+        clock = ms(THU, 14, 5, 10);
+        m->evaluate();
+        QVERIFY(poster.posted.isEmpty());
+        QCOMPARE(m->m_alerts.dueMs(), ms(THU, 14, 10));
+        QCOMPARE(wake.at(), ms(THU, 14, 10) + HealthMonitor::WAKE_DUE_MARGIN_MS); // not the check at 14:20
+        QCOMPARE(wake.slack(), (int)HealthMonitor::WAKE_SLACK_MS);
+        clock = wake.at();
+        emit wake.woke();
+        emit wake.flushed(1);
+        heart(THU, 14, 5, 5, 133);
+        m->batchSettled();
+        QTRY_COMPARE(wake.releases, 1);
+        // stock's latency: the alert when the 10 minutes are over, not a check period later
+        QCOMPARE(poster.posted.size(), 1);
+        QCOMPARE(poster.posted[0].summary, QString("High heart rate"));
+        QCOMPARE((qint64)healthJson(poster.posted[0])["end"].toDouble(), ms(THU, 14, 10));
+        QCOMPARE(m->m_alerts.dueMs(), qint64(-1)); // the run alerted: the checks go on
+        QCOMPARE(wake.at(), ms(THU, 14, 25) + HealthMonitor::WAKE_DUE_MARGIN_MS);
+    }
+
+    void noWakeOffTheWristInAWorkoutOrWithTheChecksOff()
+    {
+        settings->setValue("reminders/enabled", true);
+        HealthMonitor *m = makeWithWake(ms(THU, 10, 0));
+        heart(THU, 10, 0, 5, 70);
+        // the last reading 20 minutes ago: off the wrist (or on the charger, where the hub measures none)
+        clock = ms(THU, 10, 25);
+        m->evaluate();
+        QCOMPARE(wake.at(), qint64(-1));
+        // the off-body sensor says on the wrist: both again
+        m->setOffBody(0);
+        m->evaluate();
+        QCOMPARE(wake.at(), ms(THU, 10, 40));
+        m->setOffBody(1);
+        m->evaluate();
+        QCOMPARE(wake.at(), qint64(-1));
+        m->setOffBody(-1);
+        // worn, a workout on: the reminder minute only (the workout has the hub's 10-second latency)
+        heart(THU, 10, 25, 5, 90);
+        clock = ms(THU, 10, 30);
+        m->setWorkoutActive(true);
+        QCOMPARE(wake.at(), ms(THU, 10, 50));
+        m->setWorkoutActive(false);
+        QCOMPARE(wake.at(), ms(THU, 10, 40)); // 15 minutes after the last look
+        // hrAlerts/checkMinutes 0: the alerts at the hub's deliveries only
+        settings->setValue("hrAlerts/checkMinutes", 0);
+        m->reloadSettings();
+        QCOMPARE(wake.at(), ms(THU, 10, 50));
+        QVERIFY(poster.posted.isEmpty());
+    }
+
+    void aWakeWithNothingBatchedOrNoHubLooksAtOnce()
+    {
+        HealthMonitor *m = makeWithWake(ms(THU, 9, 0));
+        heart(THU, 9, 0, 10, 70);
+        clock = ms(THU, 9, 10);
+        m->evaluate();
+        clock = ms(THU, 9, 25);
+        emit wake.woke();
+        emit wake.flushed(0); // the display is on: everything is live
+        QCOMPARE(wake.releases, 1);
+        QVERIFY(!m->m_wakeGuard->isActive());
+        QCOMPARE(m->m_lastLookMs, ms(THU, 9, 25));
+        heart(THU, 9, 10, 15, 70);
+        clock = ms(THU, 9, 40);
+        emit wake.woke();
+        emit wake.flushed(-1); // no sensorfwd
+        QCOMPARE(wake.releases, 2);
+        // a flush answered twice or late: nothing more
+        emit wake.flushed(0);
+        QCOMPARE(wake.releases, 2);
+    }
+
+    void aBatchThatDoesNotComeIsLookedAtAfterTheGuard()
+    {
+        HealthMonitor *m = makeWithWake(ms(THU, 9, 0));
+        heart(THU, 9, 0, 10, 70);
+        clock = ms(THU, 9, 10);
+        m->evaluate();
+        clock = ms(THU, 9, 25);
+        emit wake.woke();
+        emit wake.flushed(3);
+        QVERIFY(m->m_wakeGuard->isActive());
+        QCOMPARE(m->m_wakeGuard->interval(), (int)HealthMonitor::WAKE_MAX_MS);
+        QTRY_COMPARE_WITH_TIMEOUT(wake.releases, 1, HealthMonitor::WAKE_MAX_MS + 2000);
+        QVERIFY(!m->m_inWake);
+    }
+
+    // battery: worn all the time with the alerts on (the default), 4 wakes an hour; each takes the hub's FIFO, so
+    // its own 45-minute wake never comes; none on the charger (no heart rate) after the first check that finds none
+    void fourWakesAnHourWhileWornWithTheAlertsOnNoneOnTheCharger()
+    {
+        HealthMonitor *m = makeWithWake(ms(THU, 8, 0));
+        heart(THU, 8, 0, 1, 70);
+        clock = ms(THU, 8, 1);
+        m->evaluate();
+        int wakes = 0;
+        qint64 last = clock;
+        while (wake.at() > 0 && wake.at() <= ms(THU, 10, 1)) {
+            clock = wake.at();
+            const int minutes = (int)((clock - last) / 60000);
+            emit wake.woke();
+            emit wake.flushed(1);
+            for (int i = 0; i < minutes; i++)
+                monitor->ingestHeart(last + (qint64)i * 60000 + 30000, 68);
+            m->batchSettled();
+            wakes++;
+            QTRY_COMPARE(wake.releases, wakes);
+            last = clock;
+        }
+        QCOMPARE(wakes, 8); // 08:16 ... 10:01: two hours from 08:01
+        // on the charger from 10:01: one check finds no new reading, the next finds the watch not worn and stops
+        int more = 0;
+        while (wake.at() > 0 && more < 5) {
+            clock = wake.at();
+            emit wake.woke();
+            emit wake.flushed(0);
+            more++;
+        }
+        QVERIFY(more <= 2);
+        QCOMPARE(wake.at(), qint64(-1));
+        QVERIFY(poster.posted.isEmpty());
+    }
+
+    // the daemon's wake on libkeepalive (keepaliveWake.cpp): an iphb range from the time and the slack; a time asked
+    // while it runs takes effect at the release; none stops it
+    void theKeepaliveWakeWaitsInARangeAndHoldsWhileRunning()
+    {
+        KeepaliveWake k;
+        BackgroundActivity *a = BackgroundActivity::last;
+        QVERIFY(a);
+        QSignalSpy woke(&k, &HealthWake::woke);
+        k.schedule(QDateTime::currentMSecsSinceEpoch() + 120000, 30000);
+        QVERIFY(a->isWaiting());
+        QCOMPARE(a->waits.size(), 1);
+        QVERIFY(a->waits[0].first >= 119 && a->waits[0].first <= 120);
+        QCOMPARE(a->waits[0].second - a->waits[0].first, 30);
+        a->fire();
+        QCOMPARE(woke.size(), 1);
+        QVERIFY(a->isRunning());
+        k.schedule(QDateTime::currentMSecsSinceEpoch() + 900000, 120000);
+        QVERIFY(a->isRunning()); // held until the look is done
+        QCOMPARE(a->waits.size(), 1);
+        k.release();
+        QVERIFY(a->isWaiting());
+        QCOMPARE(a->waits.size(), 2);
+        QCOMPARE(a->waits[1].second - a->waits[1].first, 120);
+        // a time in the past: as soon as dsme can
+        k.schedule(QDateTime::currentMSecsSinceEpoch() - 5000, 0);
+        QCOMPARE(a->waits.last().first, 1);
+        k.schedule(-1, 0);
+        QVERIFY(a->isStopped());
+        k.release(); // not running: nothing
+        QVERIFY(a->isStopped());
     }
 
     void aDayIsClosedOnTheFirstDeliveryAfterMidnight()

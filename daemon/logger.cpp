@@ -23,6 +23,7 @@
 #include <climits>
 
 #include "logger.h"
+#include "keepaliveWake.h"
 #include "../common.h"
 
 #include "sensorPlugins/stepCounter.h"
@@ -148,6 +149,12 @@ void Logger::setup() {
 
     m_health = new HealthMonitor(settings, &m_poster, this);
     m_health->setStore(m_store);
+    // its own wake (R5 E-04): the reminder minute and the heart rate checks with the screen off
+    if (settings->value("health/wake", true).toBool()) {
+        if (!m_wake)
+            m_wake = new KeepaliveWake(this);
+        m_health->setWake(m_wake);
+    }
     m_health->attach(m_stepCounter, m_heartrateSensor);
     connect(m_health, &HealthMonitor::goalReached, this, &Logger::goalReached);
     connect(m_health, &HealthMonitor::exerciseOffered, this, &Logger::ExerciseOffered);
