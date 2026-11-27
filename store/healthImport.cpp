@@ -14,6 +14,7 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QTextStream>
+#include <QTime>
 
 #include "../daemon/sensorPlugins/heartrateDb.h"
 #include "healthImport.h"
@@ -33,8 +34,8 @@ static QStringList datedFiles(const QString &dir, const QString &suffix)
     return out;
 }
 
-HealthImport::HealthImport(HealthDb *db, const QString &root, DayTotalsFn dayTotals, const QDate &today)
-    : m_db(db), m_root(root.endsWith('/') ? root : root + '/'), m_dayTotals(dayTotals), m_today(today)
+HealthImport::HealthImport(HealthDb *db, const QString &root, DayTotalsFn dayTotals, RestingFn resting, const QDate &today)
+    : m_db(db), m_root(root.endsWith('/') ? root : root + '/'), m_dayTotals(dayTotals), m_resting(resting), m_today(today)
 {
     m_phase = Sleep;
     while (m_phase != Done && m_db && m_db->meta(phaseKey(m_phase)).toLongLong() == 1)
@@ -48,6 +49,7 @@ QString HealthImport::phaseKey(Phase phase) const
     switch (phase) {
     case Sleep: return QStringLiteral("import.sleep");
     case Exercise: return QStringLiteral("import.exercise");
+    case Resting: return QStringLiteral("import.resting");
     case Daily: return QStringLiteral("import.daily");
     default: return QString();
     }
@@ -67,7 +69,7 @@ void HealthImport::enterPhase(Phase phase)
         m_files = datedFiles(m_root + "sleep", ".json");
     else if (phase == Exercise)
         m_files = datedFiles(m_root + "exercise", ".log");
-    else if (phase == Daily) {
+    else if (phase == Resting || phase == Daily) {
         // the first day with data: the oldest step day file or heart rate reading
         const QStringList steps = datedFiles(m_root + "stepCounter", ".log");
         QDate first = steps.isEmpty() ? QDate() : QDate::fromString(steps.first().left(10), Qt::ISODate);
@@ -99,6 +101,21 @@ bool HealthImport::step()
                     m_counts.workouts += importExerciseFile(m_db, m_root, file, &m_counts.skipped);
                 return true;
             }
+        } else if (m_phase == Resting) {
+            if (m_day.isValid() && m_day <= m_lastDay) {
+                const QDate d = m_day;
+                m_day = m_day.addDays(1);
+                DailyRecord row;
+                if (HealthDb::readDaily(m_db->path(), d, &row) && row.restingHr > 0)
+                    continue; // estimated once a day
+                if (!HeartrateDb::anyReading(m_root + "heartrate.db", QDateTime(d, QTime(0, 0)).toMSecsSinceEpoch(),
+                                             QDateTime(d.addDays(1), QTime(0, 0)).toMSecsSinceEpoch()))
+                    continue;
+                const int bpm = m_resting ? m_resting(d) : 0;
+                if (bpm > 0 && m_db->setDailyRestingHr(d, bpm))
+                    m_counts.resting++;
+                return true;
+            }
         } else if (m_phase == Daily) {
             if (m_day.isValid() && m_day <= m_lastDay) {
                 const QDate d = m_day;
@@ -121,8 +138,8 @@ bool HealthImport::step()
         m_listed = false;
         if (m_phase == Done) {
             qInfo().nospace() << "health database: the one-time import is done: " << m_counts.nights << " nights, "
-                              << m_counts.workouts << " workouts, " << m_counts.days << " days ("
-                              << m_counts.skipped << " skipped)";
+                              << m_counts.workouts << " workouts, " << m_counts.resting << " resting rates, "
+                              << m_counts.days << " days (" << m_counts.skipped << " skipped)";
             return false;
         }
     }

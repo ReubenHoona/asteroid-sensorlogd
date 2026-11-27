@@ -7,6 +7,8 @@
  * You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <cmath>
+
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -54,10 +56,15 @@ QList<QPointF> loadPressure(const QDate &day)
 
 int estimatedRestingHr(qint64 nowMs, int days)
 {
-    QVector<double> means;
-    for (const HeartrateDb::MinuteMean &m : HeartrateDb::minuteMeans(heartrateDbPath(), nowMs - (qint64)days * 86400000LL, nowMs))
-        means.append(m.bpm);
-    return estimateRestingHr(means);
+    const QDate today = QDateTime::fromMSecsSinceEpoch(nowMs).date();
+    int sum = 0, n = 0;
+    for (const DailyRecord &r : HealthDb::readDailyRange(healthDbPath(), today.addDays(1 - qMax(1, days)), today)) {
+        if (r.restingHr > 0) {
+            sum += r.restingHr;
+            n++;
+        }
+    }
+    return n ? (int)std::lround((double)sum / n) : 0;
 }
 
 DaySummary summarizeDay(const QDate &day, const HealthProfile &profile, int restingHr, qint64 nowMs)

@@ -18,6 +18,7 @@
 #include "../common.h"
 #include "../daemon/sensorPlugins/heartrateDb.h"
 #include "../metrics/healthData.h"
+#include "../metrics/restingHr.h"
 #include "../store/healthDb.h"
 #include "../store/healthImport.h"
 #include "testenv.h"
@@ -142,8 +143,15 @@ bool totalsOf(const QDate &d, DailyTotals *t)
     return true;
 }
 
+// the resting rate of a past day, as the daemon estimates it (the night's window if a night is stored for it)
+int restingOf(const QDate &d)
+{
+    SleepNight n;
+    return estimateRestingHrForDay(d, HealthDb::readNight(healthDbPath(), d, &n) ? n.main.endMs : 0);
+}
+
 // the old files of a watch: 3 nights (one with a nap), one torn night file, 4 workouts on 3 days (one torn line),
-// steps on 3 days and heart rate on 2
+// steps on 3 days and heart rate on 3 (one resting rate in them)
 void makeOldFiles()
 {
     writeSleepFile(night(MON, 420, 78));
@@ -163,6 +171,7 @@ void makeOldFiles()
         testenv::writeDay("stepCounter", d, rec(ms(d, 9, 9), 300 + i) + rec(ms(d, 14, 10), 1100 + 10 * i));
     }
     addHeart(MON, 7, 0, 30, 118);
+    addHeart(MON.addDays(1), 1, 0, 120, 54);
     addHeart(MON.addDays(4), 10, 0, 20, 70);
 }
 
@@ -616,18 +625,19 @@ private slots:
             nightsBefore[d] = n.toMap();
         }
         HealthDb db(path());
-        HealthImport import(&db, testenv::root(), totalsOf, MON.addDays(5));
+        HealthImport import(&db, testenv::root(), totalsOf, restingOf, MON.addDays(5));
         QVERIFY(!import.done());
-        QTest::ignoreMessage(QtInfoMsg, QRegularExpression("one-time import is done: 3 nights, 4 workouts, 4 days "
-                                                           "\\(2 skipped\\)"));
+        QTest::ignoreMessage(QtInfoMsg, QRegularExpression("one-time import is done: 3 nights, 4 workouts, 1 resting "
+                                                           "rates, 4 days \\(2 skipped\\)"));
         const int units = import.runAll();
         QVERIFY(import.done());
-        QCOMPARE(units, 4 + 3 + 4); // 4 night files (the torn one too), 3 day logs, 4 days with data
+        QCOMPARE(units, 4 + 3 + 3 + 4); // 4 night files (the torn one too), 3 day logs, 3 days with heart rate, 4 with data
         QCOMPARE(import.counts().nights, 3);
         QCOMPARE(import.counts().workouts, 4);
         QCOMPARE(import.counts().days, 4);
+        QCOMPARE(import.counts().resting, 1);
         QCOMPARE(import.counts().skipped, 2);
-        for (const char *phase : {"import.sleep", "import.exercise", "import.daily"})
+        for (const char *phase : {"import.sleep", "import.exercise", "import.resting", "import.daily"})
             QCOMPARE(db.meta(phase).toLongLong(), qint64(1));
         // the same answers, now from health.db (the files are still there, untouched)
         for (auto it = nightsBefore.constBegin(); it != nightsBefore.constEnd(); ++it) {
@@ -666,6 +676,10 @@ private slots:
         QCOMPARE(days[0].totals.steps, 1100);
         QCOMPARE(days[3].date, MON.addDays(4));
         QCOMPARE(days[3].totals.steps, 0);
+        // the resting rate of the day after the second night: the 24 hours up to its end hold 2 still hours at 54
+        QCOMPARE(days[1].restingHr, 54);
+        QCOMPARE(days[0].restingHr, 0); // half an hour of readings: none
+        QCOMPARE(days[3].restingHr, 0);
     }
 
     void importingTwiceIsImportingOnce()
@@ -673,23 +687,24 @@ private slots:
         makeOldFiles();
         HealthDb db(path());
         {
-            HealthImport first(&db, testenv::root(), totalsOf, MON.addDays(5));
+            HealthImport first(&db, testenv::root(), totalsOf, restingOf, MON.addDays(5));
             first.runAll();
         }
         const qint64 seq = db.seq();
         const qint64 rows = sqlNumber(path(), "SELECT (SELECT COUNT(*) FROM workout) + (SELECT COUNT(*) FROM "
                                               "sleep_session) + (SELECT COUNT(*) FROM daily)");
         // the markers: a new start does nothing
-        HealthImport again(&db, testenv::root(), totalsOf, MON.addDays(5));
+        HealthImport again(&db, testenv::root(), totalsOf, restingOf, MON.addDays(5));
         QVERIFY(again.done());
         QCOMPARE(again.runAll(), 0);
         // without them (as after a crash before the last mark): every unit again, and nothing new
         QVERIFY(db.setMeta("import.sleep", 0));
         QVERIFY(db.setMeta("import.exercise", 0));
+        QVERIFY(db.setMeta("import.resting", 0));
         QVERIFY(db.setMeta("import.daily", 0));
-        HealthImport third(&db, testenv::root(), totalsOf, MON.addDays(5));
+        HealthImport third(&db, testenv::root(), totalsOf, restingOf, MON.addDays(5));
         QVERIFY(!third.done());
-        QTest::ignoreMessage(QtInfoMsg, QRegularExpression("0 nights, 0 workouts, 0 days"));
+        QTest::ignoreMessage(QtInfoMsg, QRegularExpression("0 nights, 0 workouts, 0 resting rates, 0 days"));
         third.runAll();
         QVERIFY(third.done());
         QCOMPARE(db.seq(), seq);
@@ -702,7 +717,7 @@ private slots:
         makeOldFiles();
         HealthDb db(path());
         {
-            HealthImport part(&db, testenv::root(), totalsOf, MON.addDays(5));
+            HealthImport part(&db, testenv::root(), totalsOf, restingOf, MON.addDays(5));
             QVERIFY(part.step());
             QVERIFY(part.step()); // two nights in, then the daemon stops
         }
@@ -723,9 +738,9 @@ private slots:
         int status = 0;
         QCOMPARE(waitpid(child, &status, 0), child);
         // the next start: through every phase, the units that are in are skipped
-        HealthImport rest(&db, testenv::root(), totalsOf, MON.addDays(5));
+        HealthImport rest(&db, testenv::root(), totalsOf, restingOf, MON.addDays(5));
         QVERIFY(!rest.done());
-        QTest::ignoreMessage(QtInfoMsg, QRegularExpression("1 nights, 4 workouts, 4 days"));
+        QTest::ignoreMessage(QtInfoMsg, QRegularExpression("1 nights, 4 workouts, 1 resting rates, 4 days"));
         rest.runAll();
         QVERIFY(rest.done());
         QCOMPARE(sqlNumber(path(), "SELECT COUNT(DISTINCT wake_date) FROM sleep_session"), qint64(3));
@@ -739,7 +754,7 @@ private slots:
     void theExerciseAppsNewLinesComeInAfterTheImport()
     {
         HealthDb db(path());
-        HealthImport import(&db, testenv::root(), totalsOf, MON);
+        HealthImport import(&db, testenv::root(), totalsOf, restingOf, MON);
         QTest::ignoreMessage(QtInfoMsg, QRegularExpression("0 nights"));
         import.runAll(); // nothing old: done at once
         QVERIFY(import.done());

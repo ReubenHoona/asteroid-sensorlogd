@@ -16,6 +16,7 @@
 #include "../metrics/healthProfile.h"
 #include "../metrics/hrAlerts.h"
 #include "../metrics/moveReminder.h"
+#include "../metrics/restingHr.h"
 #include "../metrics/sleepEstimator.h"
 #include "testenv.h"
 
@@ -208,26 +209,113 @@ private slots:
         QCOMPARE(zoneMinutes(steps, 0, minuteAt(THU, 23), profile(), 60).azm, 0);
     }
 
-    void restingHeartRateAndAlertDefaults()
+    // ---- the resting heart rate: one definition (metrics/restingHr.h), on invented days ----
+    void restingHeartRateIsTheMedianOfTheRestingMinutes()
     {
-        QVector<double> few(59, 55);
-        QCOMPARE(estimateRestingHr(few), 0); // too few minutes
-        QVector<double> week;
-        for (int i = 0; i < 1000; i++)
-            week << 50 + i * 0.1; // 50.0 ... 149.9: the 5th percentile is 54.99 -> 55
-        QCOMPARE(estimateRestingHr(week), 55);
-        QCOMPARE(estimateRestingHr(QVector<double>(100, 20)), 35); // clamped
-        QCOMPARE(estimateRestingHr(QVector<double>(100, 200)), 100);
+        const qint64 day0 = ms(THU, 0), day1 = ms(THU.addDays(1), 0);
+        MinuteSeries s;
+        fill(s, THU, 1, 0, 100, 0, 58);
+        QCOMPARE(restingHrOfMinutes(s, day0, day1), 58);
+        // fewer than an hour of resting minutes: none
+        MinuteSeries few;
+        fill(few, THU, 1, 0, 59, 0, 58);
+        QCOMPARE(restingHrOfMinutes(few, day0, day1), 0);
+        fill(few, THU, 2, 0, 1, 0, 70);
+        QCOMPARE(restingHrOfMinutes(few, day0, day1), 58); // 60 minutes: the median of 59 x 58 and one 70
+        // minutes without a heart rate (not worn, on the charger: the hub pauses it) are not resting minutes
+        MinuteSeries off;
+        fill(off, THU, 1, 0, 59, 0, 50);
+        fill(off, THU, 2, 0, 100, 0, 0);
+        QCOMPARE(restingHrOfMinutes(off, day0, day1), 0);
+        // only the window counts
+        QCOMPARE(restingHrOfMinutes(s, ms(THU, 2), day1), 0);
+        // within 30-120
+        MinuteSeries low, high;
+        fill(low, THU, 1, 0, 100, 0, 25);
+        fill(high, THU, 1, 0, 100, 0, 150);
+        QCOMPARE(restingHrOfMinutes(low, day0, day1), 30);
+        QCOMPARE(restingHrOfMinutes(high, day0, day1), 120);
+    }
+
+    void aStepAndTheTenMinutesAfterItAreNotResting()
+    {
+        const qint64 day0 = ms(THU, 0), day1 = ms(THU.addDays(1), 0);
+        MinuteSeries s;
+        fill(s, THU, 8, 0, 60, 0, 50);     // still
+        fill(s, THU, 9, 0, 30, 100, 120);  // a walk
+        fill(s, THU, 9, 30, 70, 0, 80);    // seated after it: the first 10 minutes are not resting yet
+        // 60 x 50 and 60 x 80: the median 65 (with the 10 minutes it would be 70 x 80 and the median 80)
+        QCOMPARE(restingHrOfMinutes(s, day0, day1), 65);
+        // a step in the 10 minutes before the window's first minute counts too
+        MinuteSeries edge;
+        fill(edge, THU, 7, 55, 1, 20, 0);
+        fill(edge, THU, 8, 0, 70, 0, 60);
+        QCOMPARE(restingHrOfMinutes(edge, ms(THU, 8), day1), 60); // 64 resting minutes (8:06 on)
+        MinuteSeries edge2;
+        fill(edge2, THU, 7, 55, 1, 20, 0);
+        fill(edge2, THU, 8, 0, 65, 0, 60);
+        QCOMPARE(restingHrOfMinutes(edge2, ms(THU, 8), day1), 0); // 59 resting minutes
+    }
+
+    void aWorkoutIsNotResting()
+    {
+        const qint64 day0 = ms(THU, 0), day1 = ms(THU.addDays(1), 0);
+        MinuteSeries s;
+        fill(s, THU, 6, 0, 61, 0, 60);
+        fill(s, THU, 18, 0, 100, 0, 110); // a ride: no steps, a high heart rate
+        QCOMPARE(restingHrOfMinutes(s, day0, day1), 110); // were it resting
+        QCOMPARE(restingHrOfMinutes(s, day0, day1, {{ms(THU, 18), ms(THU, 19, 40)}}), 60);
+    }
+
+    void aUsualDaysRestingHeartRate()
+    {
+        // asleep to 7:00 (52-56), a walk, a desk morning (68), a run at noon, a desk afternoon (68), an evening
+        // (64), asleep from 22:00 (54): 1360 resting minutes, the median in the evening's
+        MinuteSeries s;
+        for (int i = 0; i < 420; i++)
+            fill(s, THU, i / 60, i % 60, 1, 0, 52 + i % 5);
+        fill(s, THU, 7, 0, 30, 90, 100);
+        fill(s, THU, 7, 30, 270, 0, 68);
+        fill(s, THU, 12, 0, 30, 160, 150);
+        fill(s, THU, 12, 30, 330, 0, 68);
+        fill(s, THU, 18, 0, 240, 0, 64);
+        fill(s, THU, 22, 0, 120, 0, 54);
+        QCOMPARE(restingHrOfMinutes(s, ms(THU, 0), ms(THU.addDays(1), 0)), 64);
+        // the night alone (the 24 hours up to its end hold only it here)
+        QCOMPARE(restingHrOfMinutes(s, ms(THU, 0), ms(THU, 7)), 54);
+    }
+
+    void theWindowIsTheNightsOrTheDays()
+    {
+        const QPair<qint64, qint64> day = restingWindow(THU, 0);
+        QCOMPARE(day.first, ms(THU, 0));
+        QCOMPARE(day.second, ms(THU.addDays(1), 0));
+        const QPair<qint64, qint64> night = restingWindow(THU, ms(THU, 6, 40));
+        QCOMPARE(night.first, ms(THU, 6, 40) - 24LL * 3600 * 1000);
+        QCOMPARE(night.second, ms(THU, 6, 40));
+    }
+
+    void theRestingRateInForce()
+    {
         HealthProfile p = profile();
         QCOMPARE(effectiveRestingHr(p, 55), 55);
         QCOMPARE(effectiveRestingHr(p, 0), 60);
         p.restingHr = 48;
         QCOMPARE(effectiveRestingHr(p, 55), 48); // the profile's own wins
-        // half the reserve above resting, to 5 bpm; 20 below resting
-        QCOMPARE(defaultHighBpm(profile(HealthProfile::Male, 175, 70, 30), 60), 125);
-        QCOMPARE(defaultLowBpm(profile(), 60), 40);
-        QCOMPARE(defaultHighBpm(profile(HealthProfile::Male, 175, 70, 70), 70), 110);
-        QCOMPARE(defaultLowBpm(profile(), 30), 30); // never below 30
+    }
+
+    // ---- the alert thresholds: stock's defaults, the user's own first ----
+    void theAlertDefaultsAreStocks()
+    {
+        QCOMPARE(DEFAULT_HIGH_BPM, 120);
+        QCOMPARE(DEFAULT_LOW_BPM, 50);
+        HrAlertThresholds t;
+        QCOMPARE(t.highBpm(), 120);
+        QCOMPARE(t.lowBpm(), 50);
+        t.high = 135;
+        t.low = 45;
+        QCOMPARE(t.highBpm(), 135); // a value the user set stays in force
+        QCOMPARE(t.lowBpm(), 45);
     }
 
     // ---- steps from the day file ----

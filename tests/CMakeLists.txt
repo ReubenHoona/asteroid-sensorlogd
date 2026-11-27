@@ -62,6 +62,7 @@ add_library(sensorlogd-undertest STATIC
     ${top}/metrics/sleepEstimator.cpp ${top}/metrics/sleepEstimator.h
     ${top}/metrics/autoExercise.cpp ${top}/metrics/autoExercise.h
     ${top}/metrics/healthData.cpp ${top}/metrics/healthData.h
+    ${top}/metrics/restingHr.cpp ${top}/metrics/restingHr.h
     ${top}/store/healthDb.cpp ${top}/store/healthDb.h
     ${top}/store/healthImport.cpp ${top}/store/healthImport.h
 )

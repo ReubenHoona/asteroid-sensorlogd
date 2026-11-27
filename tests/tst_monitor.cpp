@@ -17,6 +17,7 @@
 #include "peek.h"
 #include "../common.h"
 #include "../metrics/healthData.h"
+#include "../metrics/restingHr.h"
 #include "../store/healthDb.h"
 #include "testenv.h"
 
@@ -153,7 +154,7 @@ private slots:
         QCOMPARE(n.summary, QString("High heart rate"));
         QCOMPARE(n.body, QString("130 bpm"));
         QCOMPARE(n.hints.value("x-asteroid-detail").toString(),
-                 QString("Your heart rate rose above 125 bpm while you appeared to be inactive from 2:00 PM - 2:10 PM."));
+                 QString("Your heart rate rose above 120 bpm while you appeared to be inactive from 2:00 PM - 2:10 PM."));
         QCOMPARE(n.hints.value("x-asteroid-category").toString(), QString("health-alert"));
         QCOMPARE(n.hints.value("x-nemo-preview-summary").toString(), n.summary);
         QCOMPARE(n.hints.value("x-nemo-preview-body").toString(), n.body);
@@ -163,7 +164,7 @@ private slots:
         const QJsonObject j = healthJson(n);
         QCOMPARE(j["type"].toString(), QString("hr-high"));
         QCOMPARE(j["bpm"].toInt(), 130);
-        QCOMPARE(j["threshold"].toInt(), 125);
+        QCOMPARE(j["threshold"].toInt(), 120);
         QCOMPARE((qint64)j["start"].toDouble(), ms(THU, 14, 0));
         QCOMPARE((qint64)j["end"].toDouble(), ms(THU, 14, 10));
         // looking again does not repeat it
@@ -183,7 +184,7 @@ private slots:
         QCOMPARE(poster.posted[0].summary, QString("Low heart rate"));
         QCOMPARE(poster.posted[0].body, QString("36 bpm"));
         QCOMPARE(poster.posted[0].hints.value("x-asteroid-detail").toString(),
-                 QString("Your heart rate fell below 40 bpm while you appeared to be inactive from 15:00 - 15:10."));
+                 QString("Your heart rate fell below 50 bpm while you appeared to be inactive from 15:00 - 15:10."));
     }
 
     void aNewAlertReplacesTheOneOnScreen()
@@ -233,16 +234,61 @@ private slots:
         QVERIFY(poster.posted.isEmpty());
     }
 
-    void defaultThresholdsFollowTheProfile()
+    void theDefaultThresholdsAreStocksWhateverTheProfile()
     {
-        MGConfItem::setTestValue("/org/asteroidos/health/profile/age", 60); // maximum 160
+        // stock's client-side defaults, 120 and 50 (D/abgd.java:431,449), not from age or resting rate
+        MGConfItem::setTestValue("/org/asteroidos/health/profile/age", 60);
         MGConfItem::setTestValue("/org/asteroidos/health/profile/resting-hr", 70);
         HealthMonitor *m = make(ms(THU, 13, 59));
-        heart(THU, 14, 0, 10, 116); // 70 + (160 - 70) / 2 = 115: above
+        heart(THU, 14, 0, 10, 119); // not above 120
         clock = ms(THU, 14, 11);
         m->evaluate();
+        QVERIFY(poster.posted.isEmpty());
+        heart(THU, 14, 11, 10, 121);
+        clock = ms(THU, 14, 22);
+        m->evaluate();
         QCOMPARE(poster.posted.size(), 1);
-        QVERIFY(poster.posted[0].hints.value("x-asteroid-detail").toString().contains("rose above 115 bpm"));
+        QVERIFY(poster.posted[0].hints.value("x-asteroid-detail").toString().contains("rose above 120 bpm"));
+        heart(THU, 15, 0, 10, 51); // not below 50
+        heart(THU, 15, 10, 10, 49);
+        clock = ms(THU, 15, 21);
+        m->evaluate();
+        QCOMPARE(poster.posted.size(), 2);
+        QCOMPARE(poster.posted[1].summary, QString("Low heart rate"));
+        QVERIFY(poster.posted[1].hints.value("x-asteroid-detail").toString().contains("fell below 50 bpm"));
+    }
+
+    void theUsersOwnThresholdsStayInForce()
+    {
+        // saved before (Health settings): kept, the defaults only fill in what is not set
+        settings->setValue("hrAlerts/highBpm", 130);
+        HealthMonitor *m = make(ms(THU, 13, 59));
+        heart(THU, 14, 0, 10, 125);
+        clock = ms(THU, 14, 11);
+        m->evaluate();
+        QVERIFY(poster.posted.isEmpty());
+        heart(THU, 15, 0, 10, 48); // the low one is not set: 50
+        clock = ms(THU, 15, 11);
+        m->evaluate();
+        QCOMPARE(poster.posted.size(), 1);
+        QVERIFY(poster.posted[0].hints.value("x-asteroid-detail").toString().contains("fell below 50 bpm"));
+        QCOMPARE(testenv::setting("hrAlerts/highBpm").toInt(), 130);
+    }
+
+    void noAlertForTheTimeOnTheCharger()
+    {
+        // on the charger the hub pauses the heart rate: no reading, so no minute of a run
+        HealthMonitor *m = make(ms(THU, 13, 59));
+        heart(THU, 14, 0, 6, 135);
+        heart(THU, 14, 26, 6, 135); // 20 minutes on the charger between
+        clock = ms(THU, 14, 33);
+        m->evaluate();
+        QVERIFY(poster.posted.isEmpty());
+        heart(THU, 16, 0, 9, 40);
+        heart(THU, 16, 30, 9, 40);
+        clock = ms(THU, 16, 40);
+        m->evaluate();
+        QVERIFY(poster.posted.isEmpty());
     }
 
     void activeMinutesAreNoAlert()
@@ -618,6 +664,62 @@ private slots:
         clock = ms(THU, 9, 0);
         m->evaluate();
         QCOMPARE(m->store()->seq(), seq);
+    }
+
+    // ---- the resting heart rate: once a day, in health.db ----
+    void theDaysRestingRateIsEstimatedWithTheNight()
+    {
+        const QDate eve = THU.addDays(-1);
+        HeartrateDb db(heartrateDbPath());
+        QVector<HeartrateDb::Reading> rows;
+        for (int i = 0; i < 480; i++)
+            rows.append({ms(eve, 22, 30) + (qint64)i * 60000 + 15000, 55 + (i % 6), 4});
+        QVERIFY(db.add(rows));
+        HealthMonitor *m = make(ms(THU, 7, 20));
+        QVERIFY(m->m_restingEstimate == 0);
+        m->evaluate(); // the night is stored, and with it the day's resting rate
+        DailyRecord r;
+        QVERIFY(HealthDb::readDaily(healthDbPath(), THU, &r));
+        QCOMPARE(r.restingHr, 58); // 480 minutes at 55-60, 80 of each: the median 57.5
+        QVERIFY(!r.closed);        // the day is not over
+        QCOMPARE(m->m_restingEstimate, 58); // in force from now on
+        // estimated once: more readings that day do not change it
+        QVector<HeartrateDb::Reading> later;
+        for (int i = 0; i < 120; i++)
+            later.append({ms(THU, 9, 0) + (qint64)i * 60000 + 15000, 75, 4});
+        QVERIFY(db.add(later));
+        clock = ms(THU, 12, 0);
+        m->evaluate();
+        QVERIFY(HealthDb::readDaily(healthDbPath(), THU, &r));
+        QCOMPARE(r.restingHr, 58);
+        // the day's close keeps it
+        QTRY_VERIFY(m->importDone());
+        clock = ms(THU.addDays(1), 0, 30);
+        m->evaluate();
+        QVERIFY(HealthDb::readDaily(healthDbPath(), THU, &r));
+        QVERIFY(r.closed);
+        QCOMPARE(r.restingHr, 58);
+    }
+
+    void aDayWithoutANightGetsItsRateAtTheClose()
+    {
+        HeartrateDb db(heartrateDbPath());
+        QVector<HeartrateDb::Reading> rows;
+        for (int i = 0; i < 120; i++)
+            rows.append({ms(THU, 10, 0) + (qint64)i * 60000 + 15000, 66, 4});
+        QVERIFY(db.add(rows));
+        HealthMonitor *m = make(ms(THU, 22, 0));
+        QTRY_VERIFY(m->importDone());
+        m->evaluate();
+        QVERIFY(!HealthDb::readDaily(healthDbPath(), THU, nullptr));
+        clock = ms(THU.addDays(1), 0, 40); // the first batch after midnight
+        m->evaluate();
+        DailyRecord r;
+        QVERIFY(HealthDb::readDaily(healthDbPath(), THU, &r));
+        QVERIFY(r.closed);
+        QCOMPARE(r.restingHr, 66); // over the day itself
+        QCOMPARE(estimateRestingHrForDay(THU, 0), 66);
+        QCOMPARE(m->m_restingEstimate, 66);
     }
 
     // ---- health.db: the import at start, the days closed after midnight, the Exercise app's workouts ----

@@ -37,7 +37,8 @@ MinuteSeries loadDay(const QDate &day);
 // the barometer records of the day (time in seconds, pressure)
 QList<QPointF> loadPressure(const QDate &day);
 
-// The resting heart rate estimated from the last `days` days of heart rate readings (0: not enough)
+// The resting heart rate in force: the mean of the daily estimates (health.db daily.resting_hr, restingHr.h) of
+// the last `days` local days up to the one of nowMs, rounded (0: none of them has one)
 int estimatedRestingHr(qint64 nowMs, int days = 7);
 
 // Everything a day's numbers are (the Health app's day summary, the closed row of the day in health.db): the

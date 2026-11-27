@@ -31,6 +31,7 @@ set(HEALTH_METRICS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/metrics/sleepEstimator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metrics/autoExercise.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metrics/healthData.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metrics/restingHr.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/store/healthDb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/store/healthImport.cpp
 )

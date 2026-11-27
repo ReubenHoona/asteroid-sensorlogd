@@ -198,18 +198,27 @@ private slots:
         QCOMPARE(loader.zoneForBpm(180), 3);
         QCOMPARE(loader.restingHr(), 60);
         QCOMPARE(loader.maxHr(), 190);
-        QCOMPARE(loader.defaultHighBpm(), 125);
-        QCOMPARE(loader.defaultLowBpm(), 40);
+        QCOMPARE(loader.defaultHighBpm(), 120); // stock's, whatever the profile
+        QCOMPARE(loader.defaultLowBpm(), 50);
     }
 
     void theRestingRateIsEstimatedWhenTheProfileHasNone()
     {
         MGConfItem::setTestValue("/org/asteroidos/health/profile/age", 40);
         HealthMetricsLoader loader;
-        QCOMPARE(loader.restingHr(), 60); // no readings: the default
-        const QDate d = QDate::currentDate().addDays(-1);
-        addHeart(d, 2, 0, 100, 52);
-        QCOMPARE(loader.restingHr(), 52); // the low end of a week of minutes
+        QCOMPARE(loader.restingHr(), 60); // no daily estimate: the default
+        const QDate today = QDate::currentDate();
+        addHeart(today.addDays(-1), 2, 0, 100, 52);
+        QCOMPARE(loader.restingHr(), 60); // readings are not a resting rate: the daily estimate is
+        {
+            HealthDb db(healthDbPath());
+            QVERIFY(db.setDailyRestingHr(today.addDays(-1), 52));
+            QVERIFY(db.setDailyRestingHr(today.addDays(-3), 57));
+            QVERIFY(db.setDailyRestingHr(today.addDays(-7), 40)); // more than a week ago
+        }
+        QCOMPARE(loader.restingHr(), 55); // the mean of the last 7 days', 54.5
+        QCOMPARE(loader.restingHrOf(today.addDays(-1)), 52);
+        QCOMPARE(loader.restingHrOf(today.addDays(-2)), -1);
         QCOMPARE(loader.maxHr(), 180);
         MGConfItem::setTestValue("/org/asteroidos/health/profile/resting-hr", 47);
         QCOMPARE(loader.restingHr(), 47);

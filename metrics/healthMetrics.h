@@ -93,17 +93,9 @@ struct ZoneMinutes {
 ZoneMinutes zoneMinutes(const MinuteSeries &series, qint64 fromMinute, qint64 toMinute, const HealthProfile &profile,
                         int restingHr);
 
-// The resting heart rate stock shows: from age and the readings (a typical resting rate is the lowest part of a
-// week's minutes, mostly sleep): the 5th percentile of the minute means, 0 if there are not enough minutes
-int estimateRestingHr(const QVector<double> &minuteMeans);
-// the resting heart rate to use: the profile's if set, else the estimate, else 60
+// the resting heart rate to use: the profile's if set, else the estimate in force (the mean of the last 7 days'
+// daily estimates, restingHr.h), else 60
 int effectiveRestingHr(const HealthProfile &profile, int estimate);
-
-// the default thresholds of the high and low heart rate alerts (stock: "from age and typical resting heart
-// rate", the numbers are not published: here half the heart rate reserve above resting for high, 20 bpm below
-// resting for low, both to 5 bpm)
-int defaultHighBpm(const HealthProfile &profile, int restingHr);
-int defaultLowBpm(const HealthProfile &profile, int restingHr);
 
 // stride from height and sex (the usual 0.415 / 0.413 of the height, in between if the gender is not set)
 double strideM(const HealthProfile &profile);

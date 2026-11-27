@@ -141,33 +141,11 @@ ZoneMinutes zoneMinutes(const MinuteSeries &series, qint64 fromMinute, qint64 to
     return z;
 }
 
-int estimateRestingHr(const QVector<double> &minuteMeans)
-{
-    if (minuteMeans.size() < 60)
-        return 0;
-    QVector<double> sorted = minuteMeans;
-    std::sort(sorted.begin(), sorted.end());
-    const int index = (int)std::floor(0.05 * (sorted.size() - 1));
-    return qBound(35, (int)std::lround(sorted.at(index)), 100);
-}
-
 int effectiveRestingHr(const HealthProfile &profile, int estimate)
 {
     if (profile.restingHr > 0)
         return profile.restingHr;
     return estimate > 0 ? estimate : 60;
-}
-
-static int roundTo5(double v) { return 5 * (int)std::lround(v / 5.0); }
-
-int defaultHighBpm(const HealthProfile &profile, int restingHr)
-{
-    return qMax(100, roundTo5(restingHr + 0.5 * (profile.maxHr() - restingHr)));
-}
-
-int defaultLowBpm(const HealthProfile &, int restingHr)
-{
-    return qMax(30, roundTo5(restingHr - 20));
 }
 
 double strideM(const HealthProfile &profile)

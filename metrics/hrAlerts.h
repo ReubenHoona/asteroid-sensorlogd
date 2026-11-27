@@ -28,11 +28,22 @@ namespace Health {
  * INACTIVE_STEPS steps, and its mean heart rate is above the high threshold (or below the low one). A run of
  * RUN_MINUTES makes one alert; the next one of that kind needs a minute that does not belong to a run.
  */
+// Stock's defaults, used while the user has set no threshold of their own: low 50, high 120 bpm
+// (D/abgd.java:431,449: HeartRateAlertThresholdType.CLIENT_SIDE_DEFAULT). Stock's precedence is the user's
+// custom value, then a personal (derived) one, then the server's default, then these; the personal and the
+// server's come from the cloud, which this watch has not, so here it is the user's value, else these.
+static const int DEFAULT_HIGH_BPM = 120;
+static const int DEFAULT_LOW_BPM = 50;
+
 struct HrAlertThresholds {
     bool highEnabled = true;
-    int high = 0; // bpm; 0: the default for the profile
+    int high = 0; // bpm; 0: none set, DEFAULT_HIGH_BPM
     bool lowEnabled = true;
-    int low = 0;
+    int low = 0;  // bpm; 0: none set, DEFAULT_LOW_BPM
+
+    // the thresholds in force
+    int highBpm() const { return high > 0 ? high : DEFAULT_HIGH_BPM; }
+    int lowBpm() const { return low > 0 ? low : DEFAULT_LOW_BPM; }
 };
 
 struct HrAlert {

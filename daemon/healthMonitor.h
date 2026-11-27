@@ -36,7 +36,8 @@ class HeartrateSensorPlugin;
  * What the Health app does on its own account while the watch is worn: high and low heart rate alerts
  * (health-fitness-16), reminders to move and their celebrations (-15), the steps goal reached (-10, -14),
  * auto-detected exercise prompts (-28), the nightly sleep estimate (-17), and the rows of health.db it writes: the
- * night, and the day closed on the first delivery after its midnight (stock WHS PRE_MIDNIGHT_FLUSH).
+ * night, the day's resting heart rate (restingHr.h: in the morning with the night, else at the day's close), and
+ * the day closed on the first delivery after its midnight (stock WHS PRE_MIDNIGHT_FLUSH).
  *
  * The monitor is fed by the readings the sensor hub delivers (the plugins' stepsTaken and heartReading, with
  * the time each reading was taken) and looks at them when a delivery is over (the plugins' batchSettled), when
@@ -49,8 +50,8 @@ class HeartrateSensorPlugin;
  *
  * Settings (QSettings asteroid/sensorlogd, written by the Health app through LoggerSettings):
  *   reminders/enabled (false), reminders/startHour (9), reminders/endHour (18), reminders/days (127)
- *   hrAlerts/highEnabled (true), hrAlerts/highBpm (0: the default for age and resting rate),
- *   hrAlerts/lowEnabled (true), hrAlerts/lowBpm (0)
+ *   hrAlerts/highEnabled (true), hrAlerts/highBpm (0: none set, stock's default 120),
+ *   hrAlerts/lowEnabled (true), hrAlerts/lowBpm (0: none set, stock's default 50)
  *   autoExercise/start (true), autoExercise/stop (true)
  * The steps goal is the dconf key /org/asteroidos/ux/steps-goal (10000), the profile the keys of healthProfile.h.
  */
@@ -122,6 +123,10 @@ private:
     // the days before today that have data and no closed row in health.db: closed now
     void closeDays();
     bool dayTotals(const QDate &day, Health::DailyTotals *totals);
+    // the day's resting heart rate, estimated once (nightEndMs: the end of the night that ended on it, 0: none)
+    int restingOf(const QDate &day, qint64 nightEndMs);
+    void storeRestingHr(const QDate &day, qint64 nightEndMs);
+    qint64 nightEndOf(const QDate &wakeDate) const;
     QString clockText(qint64 ms) const;
     bool worn(qint64 nowMs) const;
 

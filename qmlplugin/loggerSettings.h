@@ -45,7 +45,7 @@ class LoggerSettings : public QObject {
     // bit 0 Monday ... bit 6 Sunday; 127: every day
     Q_PROPERTY(int remindersDays READ getRemindersDays WRITE setRemindersDays NOTIFY healthChanged)
 
-    // High and low heart rate notifications (stock: on; the threshold 0 is automatic: age and resting rate)
+    // High and low heart rate notifications (stock: on; a threshold of 0 is none set: stock's 120 and 50 then)
     Q_PROPERTY(bool hrAlertHighEnabled READ getHrAlertHighEnabled WRITE setHrAlertHighEnabled NOTIFY healthChanged)
     Q_PROPERTY(int hrAlertHighBpm READ getHrAlertHighBpm WRITE setHrAlertHighBpm NOTIFY healthChanged)
     Q_PROPERTY(bool hrAlertLowEnabled READ getHrAlertLowEnabled WRITE setHrAlertLowEnabled NOTIFY healthChanged)

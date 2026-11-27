@@ -19,6 +19,7 @@
 #include "sensorPlugins/stepCounter.h"
 #include "../common.h"
 #include "../metrics/healthData.h"
+#include "../metrics/restingHr.h"
 
 using namespace Health;
 
@@ -110,7 +111,7 @@ void HealthMonitor::start()
     m_closedThrough = QDate();
     m_import.reset(new HealthImport(m_store, loggerRootPath(),
                                     [this](const QDate &day, DailyTotals *totals) { return dayTotals(day, totals); },
-                                    m_day));
+                                    [this](const QDate &day) { return restingOf(day, nightEndOf(day)); }, m_day));
     if (!m_import->done()) {
         QMetaObject::invokeMethod(this, "importStep", Qt::QueuedConnection);
     } else {
@@ -215,13 +216,10 @@ void HealthMonitor::evaluate()
     const qint64 t = now();
     rollDay(QDateTime::fromMSecsSinceEpoch(t).date());
     loadProfile();
-    const int rhr = effectiveRestingHr(m_profile, m_restingEstimate);
 
-    // 1. heart rate alerts
-    const int high = m_config.hrAlerts.high > 0 ? m_config.hrAlerts.high : defaultHighBpm(m_profile, rhr);
-    const int low = m_config.hrAlerts.low > 0 ? m_config.hrAlerts.low : defaultLowBpm(m_profile, rhr);
-    for (const HrAlert &alert : m_alerts.feed(m_series, t, high, m_config.hrAlerts.highEnabled, low,
-                                              m_config.hrAlerts.lowEnabled))
+    // 1. heart rate alerts: the user's thresholds, else stock's defaults
+    for (const HrAlert &alert : m_alerts.feed(m_series, t, m_config.hrAlerts.highBpm(), m_config.hrAlerts.highEnabled,
+                                              m_config.hrAlerts.lowBpm(), m_config.hrAlerts.lowEnabled))
         postAlert(alert);
 
     // 2. reminders to move
@@ -373,8 +371,34 @@ void HealthMonitor::checkSleep()
     const SleepNight night = estimateNight(local.date(), m_profile, rhr);
     if (!night.valid || t - night.main.endMs < SLEEP_QUIET_MS)
         return;
-    if (m_store && m_store->storeNight(night, QString::fromLatin1(HealthImport::SLEEP_ALGO)))
+    if (m_store && m_store->storeNight(night, QString::fromLatin1(HealthImport::SLEEP_ALGO))) {
         m_settings->setValue("HealthPrivate/sleepStored", today);
+        // the day's resting heart rate: once, over the 24 hours up to the night's end
+        storeRestingHr(local.date(), night.main.endMs);
+    }
+}
+
+qint64 HealthMonitor::nightEndOf(const QDate &wakeDate) const
+{
+    SleepNight n;
+    return m_store && HealthDb::readNight(m_store->path(), wakeDate, &n) ? n.main.endMs : 0;
+}
+
+int HealthMonitor::restingOf(const QDate &day, qint64 nightEndMs)
+{
+    return estimateRestingHrForDay(day, nightEndMs);
+}
+
+void HealthMonitor::storeRestingHr(const QDate &day, qint64 nightEndMs)
+{
+    if (!m_store)
+        return;
+    DailyRecord row;
+    if (HealthDb::readDaily(m_store->path(), day, &row) && row.restingHr > 0)
+        return; // estimated once a day
+    const int bpm = restingOf(day, nightEndMs);
+    if (bpm > 0 && m_store->setDailyRestingHr(day, bpm))
+        m_restingEstimate = estimatedRestingHr(now());
 }
 
 bool HealthMonitor::dayTotals(const QDate &day, DailyTotals *totals)
@@ -382,7 +406,8 @@ bool HealthMonitor::dayTotals(const QDate &day, DailyTotals *totals)
     if (!hasDataOn(day))
         return false;
     loadProfile();
-    const int rhr = effectiveRestingHr(m_profile, m_restingEstimate);
+    // the rate in force now (the import gives the days before it their rates first)
+    const int rhr = effectiveRestingHr(m_profile, estimatedRestingHr(now()));
     const DaySummary d = summarizeDay(day, m_profile, rhr, now());
     totals->steps = d.steps;
     totals->kcal = d.energyKcal;
@@ -409,8 +434,11 @@ void HealthMonitor::closeDays()
     from = qMax(from, yesterday.addDays(1 - CLOSE_DAYS_BACK));
     for (QDate d = from; d <= yesterday; d = d.addDays(1)) {
         DailyTotals totals;
-        if (dayTotals(d, &totals))
-            m_store->setDailyTotals(d, totals, now());
+        if (!dayTotals(d, &totals))
+            continue;
+        // a day without a night stored for it gets its resting heart rate now, over the day itself
+        storeRestingHr(d, nightEndOf(d));
+        m_store->setDailyTotals(d, totals, now());
     }
     m_closedThrough = yesterday;
 }

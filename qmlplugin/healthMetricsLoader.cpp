@@ -18,6 +18,7 @@
 #include "../common.h"
 #include "../metrics/healthData.h"
 #include "../metrics/healthMetrics.h"
+#include "../metrics/hrAlerts.h"
 #include "../store/healthDb.h"
 
 using namespace Health;
@@ -134,16 +135,20 @@ int HealthMetricsLoader::zoneForBpm(int bpm)
 int HealthMetricsLoader::restingHr() { return Context().resting; }
 int HealthMetricsLoader::maxHr() { return HealthProfile::load().maxHr(); }
 
+int HealthMetricsLoader::restingHrOf(QDate date)
+{
+    DailyRecord r;
+    return HealthDb::readDaily(healthDbPath(), date, &r) && r.restingHr > 0 ? r.restingHr : -1;
+}
+
 int HealthMetricsLoader::defaultHighBpm()
 {
-    const Context c;
-    return Health::defaultHighBpm(c.profile, c.resting);
+    return DEFAULT_HIGH_BPM;
 }
 
 int HealthMetricsLoader::defaultLowBpm()
 {
-    const Context c;
-    return Health::defaultLowBpm(c.profile, c.resting);
+    return DEFAULT_LOW_BPM;
 }
 
 QVariantMap HealthMetricsLoader::daily(QDate date)

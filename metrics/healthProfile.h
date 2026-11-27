@@ -25,7 +25,7 @@ namespace Health {
  *   /org/asteroidos/health/profile/weight-kg   d
  *   /org/asteroidos/health/profile/birth-date  s  ISO yyyy-MM-dd; else
  *   /org/asteroidos/health/profile/age         i  years
- *   /org/asteroidos/health/profile/resting-hr  i  bpm; 0 or unset: estimated from the readings
+ *   /org/asteroidos/health/profile/resting-hr  i  bpm; 0 or unset: the daily estimates (restingHr.h)
  *
  * Anything unset takes a neutral value (170 cm, 70 kg, 30 years, no gender), so that the numbers exist before
  * the profile is filled in.

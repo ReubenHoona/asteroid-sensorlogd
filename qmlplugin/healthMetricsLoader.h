@@ -59,10 +59,13 @@ public:
     Q_INVOKABLE QVariantList zones();
     // 0 Light, 1 Moderate, 2 Vigorous, 3 Peak
     Q_INVOKABLE int zoneForBpm(int bpm);
+    // the resting heart rate in force (the profile's, else the mean of the last 7 days' daily estimates, else 60)
     Q_INVOKABLE int restingHr();
+    // the day's resting heart rate, estimated once a day by the daemon (metrics/restingHr.h); -1: none
+    Q_INVOKABLE int restingHrOf(QDate date);
     Q_INVOKABLE int maxHr();
-    // the default thresholds of the high and low heart rate alerts for the profile (what the Health settings
-    // show while the threshold is automatic)
+    // the thresholds of the high and low heart rate alerts while the user has set none: stock's 120 and 50
+    // (what the Health settings show then)
     Q_INVOKABLE int defaultHighBpm();
     Q_INVOKABLE int defaultLowBpm();
     Q_INVOKABLE void refresh() { emit dataChanged(); }
