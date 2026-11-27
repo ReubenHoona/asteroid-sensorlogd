@@ -88,6 +88,10 @@ public slots:
     void setWorkoutActive(bool active);
     // the time of the next reminder to move (ms since the epoch), -1 if none
     qlonglong nextReminderAt();
+    // the 'Start tracking?' offer last made (HealthMonitor::exerciseOffer): activity, sinceMs, offeredMs, minuteMs,
+    // steps, bpm; {} if none (older than 10 minutes, or a workout began since). The Exercise app begins the workout
+    // of the offer at the activity's start (stock's auto-start) with these minutes counted in.
+    QVariantMap ExerciseOffer();
 
     // ---- workouts in health.db (D-Bus: org.asteroid.sensorlogd.logger) ----
     // A workout begins (source "manual" or "auto", type: letters, digits, '-', '_'): its id, 0 if refused (a

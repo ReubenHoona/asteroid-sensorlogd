@@ -27,6 +27,8 @@ using namespace Health;
 
 static const char *const GOAL_KEY = "/org/asteroidos/ux/steps-goal";
 static const char *const TWELVE_HOUR_KEY = "/org/asteroidos/settings/use-12h-format";
+// the Exercise app's types with 'Start workout reminders' off (its ExerciseSettings.qml)
+static const char *const START_OFF_KEY = "/org/asteroidos/exercise/auto-start-off";
 static const int DEFAULT_STEPS_GOAL = 10000;
 static const int PROFILE_CACHE_MS = 10 * 60 * 1000;
 static const int SLEEP_RETRY_MS = 30 * 60 * 1000;
@@ -43,6 +45,7 @@ HealthMonitor::HealthMonitor(QSettings *settings, NotificationPoster *poster, QO
 {
     m_goalItem = new MDConfItem(GOAL_KEY, this);
     m_twelveHourItem = new MDConfItem(TWELVE_HOUR_KEY, this);
+    m_startOffItem = new MDConfItem(START_OFF_KEY, this);
     m_settle = new QTimer(this);
     m_settle->setSingleShot(true);
     connect(m_settle, &QTimer::timeout, this, &HealthMonitor::evaluate);
@@ -164,6 +167,32 @@ void HealthMonitor::setWorkoutActive(bool active)
 {
     // (the Exercise app's workouts come through the daemon's D-Bus methods since WO-02: no log lines to take in)
     m_workoutActive = active;
+    // a workout began: the offer was taken (or another workout is the activity)
+    if (active)
+        m_offeredMs = 0;
+}
+
+QVariantMap HealthMonitor::exerciseOffer() const
+{
+    const qint64 t = now();
+    if (m_offeredMs <= 0 || m_workoutActive || t - m_offeredMs > OFFER_VALID_MS || t < m_offeredMs)
+        return QVariantMap();
+    QVariantList minutes, steps, bpm;
+    const qint64 lastDone = MinuteSeries::minuteOf(t) - 1;
+    for (qint64 minute = MinuteSeries::minuteOf(m_offer.sinceMs); minute <= lastDone; minute++) {
+        const Minute m = m_series.at(minute);
+        minutes << (qlonglong)MinuteSeries::msOf(minute);
+        steps << m.steps;
+        bpm << (m.hrCount > 0 ? m.hr : 0.0);
+    }
+    QVariantMap o;
+    o.insert("activity", m_offer.activity);
+    o.insert("sinceMs", (qlonglong)m_offer.sinceMs);
+    o.insert("offeredMs", (qlonglong)m_offeredMs);
+    o.insert("minuteMs", minutes);
+    o.insert("steps", steps);
+    o.insert("bpm", bpm);
+    return o;
 }
 
 void HealthMonitor::batchSettled()
@@ -244,8 +273,11 @@ void HealthMonitor::evaluate()
     // 3. the steps goal
     checkGoal();
 
-    // 4. auto-detected exercise
-    for (const ExerciseOffer &offer : m_exercise.feed(m_series, t, m_config.exercise, m_workoutActive))
+    // 4. auto-detected exercise (the types whose start reminder the Exercise app has off, read as they are now)
+    Health::AutoExerciseSettings exercise = m_config.exercise;
+    for (const QString &type : m_startOffItem->value(QString()).toString().split(',', Qt::SkipEmptyParts))
+        exercise.startOff << type.trimmed();
+    for (const ExerciseOffer &offer : m_exercise.feed(m_series, t, exercise, m_workoutActive))
         postExercise(offer);
 
     // 5. the skin temperature, sampled inside a night's sleep only (M4 WO-13)
@@ -351,6 +383,8 @@ void HealthMonitor::postExercise(const ExerciseOffer &offer)
     n.hints.insert("x-asteroid-exercise", json({{"action", "start"}, {"activity", offer.activity},
                                                 {"since", (double)offer.sinceMs}}));
     post(n);
+    m_offer = offer;
+    m_offeredMs = now();
     emit exerciseOffered(QStringLiteral("start"), offer.activity, offer.sinceMs);
 }
 

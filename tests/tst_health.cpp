@@ -898,6 +898,32 @@ private slots:
         QVERIFY(a.feed(s, ms(THU, 10, 12), cfg, false).isEmpty());
     }
 
+    // R5 E-16: 'Start workout reminders' per type (the Exercise app's auto-start-off): Run off silences a run's
+    // offer, and the same run is not offered as a walk later; a walk is still offered
+    void aTypesStartReminderOffSilencesItsOfferOnly()
+    {
+        MinuteSeries s;
+        fill(s, THU, 10, 0, 12, 160, 0);
+        fill(s, THU, 10, 12, 10, 100, 0); // the run slows to a walk: the same activity
+        AutoExercise a;
+        AutoExerciseSettings cfg;
+        cfg.startOff << "Run";
+        QVERIFY(a.feed(s, ms(THU, 10, 12, 5), cfg, false).isEmpty());
+        QVERIFY(a.feed(s, ms(THU, 10, 22, 5), cfg, false).isEmpty());
+        MinuteSeries w;
+        fill(w, THU, 11, 0, 10, 100, 0);
+        AutoExercise b;
+        const QList<ExerciseOffer> o = b.feed(w, ms(THU, 11, 10, 5), cfg, false);
+        QCOMPARE(o.size(), 1);
+        QCOMPARE(o[0].activity, QString("walking"));
+        QCOMPARE(exerciseTypeOf("walking"), QString("Walk"));
+        QCOMPARE(exerciseTypeOf("running"), QString("Run"));
+        // Walk off too: nothing
+        cfg.startOff << "Walk";
+        AutoExercise c;
+        QVERIFY(c.feed(w, ms(THU, 11, 10, 5), cfg, false).isEmpty());
+    }
+
     // M4 WO-07: 'Finished working out?' is the Exercise app's (10 still minutes by cadence and GPS speed), so a
     // workout's quiet minutes make no offer here: not after 5 (the old offer), not after 10 or 30, and a ride
     // (no steps at all) none either

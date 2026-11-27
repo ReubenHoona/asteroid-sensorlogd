@@ -12,6 +12,7 @@
 
 #include <QList>
 #include <QString>
+#include <QStringList>
 
 #include "healthMetrics.h"
 
@@ -27,6 +28,10 @@ namespace Health {
  * WALK_MEAN or more (RUN_MEAN or more: running). One offer per activity: another needs a quiet spell
  * (QUIET_MINUTES with fewer than QUIET_CADENCE steps) in between. While a workout is going (the Exercise app's,
  * in health.db) there is no start offer: the workout is the activity.
+ * "Start workout reminders" is per exercise type in stock (the Auto-Start page's types, each its own
+ * WorkoutSettingsEntity isAutoStartEnabled, sxc.java, xai.java): the Exercise app keeps the types turned off in
+ * the dconf key /org/asteroidos/exercise/auto-start-off (startOff here). An activity whose type is off makes no
+ * offer (and counts as offered: the same activity is not offered as the other type a minute later).
  * No stop offer here (M4 WO-07): stock's "Finished working out?" (auto-stop) is an event of the workout itself,
  * asked for by the exercise app in its exercise config when "End workout reminders" is on and the type has it
  * (wxl.java:1601-1602, EXERCISE_EVENT_TYPE_AUTO_STOP) and turned by it into the question (ptx.java:580,
@@ -36,12 +41,17 @@ namespace Health {
  */
 struct AutoExerciseSettings {
     bool start = true;
+    // the exercise types whose start reminder is off (the Exercise app's keys: "Walk", "Run")
+    QStringList startOff;
 };
 
 struct ExerciseOffer {
     QString activity; // "walking" or "running"
     qint64 sinceMs;   // when the activity began
 };
+
+// the Exercise app's type of an activity ("walking" -> "Walk", "running" -> "Run")
+QString exerciseTypeOf(const QString &activity);
 
 class AutoExercise
 {

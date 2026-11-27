@@ -11,6 +11,11 @@
 
 namespace Health {
 
+QString exerciseTypeOf(const QString &activity)
+{
+    return activity == QLatin1String("running") ? QStringLiteral("Run") : QStringLiteral("Walk");
+}
+
 void AutoExercise::reset()
 {
     *this = AutoExercise();
@@ -53,8 +58,11 @@ QList<ExerciseOffer> AutoExercise::feed(const MinuteSeries &series, qint64 nowMs
         if (!workoutActive) {
             if (settings.start && m_armed && m_active >= START_MINUTES && m_activeSum / m_active >= WALK_MEAN) {
                 m_armed = false;
-                offers.append({m_activeSum / m_active >= RUN_MEAN ? QStringLiteral("running") : QStringLiteral("walking"),
-                               MinuteSeries::msOf(m_activeStart)});
+                const QString activity = m_activeSum / m_active >= RUN_MEAN ? QStringLiteral("running")
+                                                                            : QStringLiteral("walking");
+                // the type's own 'Start workout reminders' off: no offer for this activity
+                if (!settings.startOff.contains(exerciseTypeOf(activity)))
+                    offers.append({activity, MinuteSeries::msOf(m_activeStart)});
             }
         } else {
             m_armed = false; // the workout in progress is the activity ("Finished working out?" is the app's)

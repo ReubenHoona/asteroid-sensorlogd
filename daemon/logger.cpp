@@ -268,6 +268,10 @@ qlonglong Logger::nextReminderAt() {
     return m_health ? m_health->nextReminderMs() : -1;
 }
 
+QVariantMap Logger::ExerciseOffer() {
+    return m_health ? m_health->exerciseOffer() : QVariantMap();
+}
+
 qlonglong Logger::BeginWorkout(qlonglong startMs, const QString &type, const QString &source, bool gps) {
     const qint64 id = m_store->beginWorkout(startMs, type, source, gps);
     if (id > 0)

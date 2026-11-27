@@ -528,6 +528,78 @@ private slots:
         QVERIFY(poster.posted.isEmpty());
     }
 
+    // R5 E-16: the Exercise app's per-type 'Start workout reminders' (dconf auto-start-off), read at each look
+    void aTypeTurnedOffInTheExerciseAppMakesNoOffer()
+    {
+        MGConfItem::setTestValue("/org/asteroidos/exercise/auto-start-off", "Walk");
+        HealthMonitor *m = make(ms(THU, 10, 0));
+        QSignalSpy offered(m, &HealthMonitor::exerciseOffered);
+        steps(THU, 10, 0, 12, 100);
+        clock = ms(THU, 10, 12, 10);
+        m->evaluate();
+        QVERIFY(poster.posted.isEmpty());
+        QCOMPARE(offered.count(), 0);
+        QVERIFY(m->exerciseOffer().isEmpty());
+        // Run off instead (Walk on again): a later walk is offered
+        MGConfItem::setTestValue("/org/asteroidos/exercise/auto-start-off", "Run");
+        steps(THU, 10, 12, 6, 0);
+        steps(THU, 10, 18, 10, 100);
+        clock = ms(THU, 10, 28, 10);
+        m->evaluate();
+        QCOMPARE(offered.count(), 1);
+        QCOMPARE(offered[0][1].toString(), QString("walking"));
+    }
+
+    // R5 E-11: the offer is kept for the Exercise app's start at the activity's start: its minutes since then, for
+    // OFFER_VALID_MS, and not once a workout has begun
+    void theOfferKeepsTheActivitysStartAndMinutes()
+    {
+        HealthMonitor *m = make(ms(THU, 10, 0));
+        QVERIFY(m->exerciseOffer().isEmpty());
+        steps(THU, 10, 0, 12, 100);
+        heart(THU, 10, 0, 12, 110);
+        clock = ms(THU, 10, 10, 10);
+        m->evaluate();
+        QCOMPARE(poster.posted.size(), 1);
+        clock = ms(THU, 10, 12, 30);
+        QVariantMap o = m->exerciseOffer();
+        QCOMPARE(o.value("activity").toString(), QString("walking"));
+        QCOMPARE(o.value("sinceMs").toLongLong(), ms(THU, 10, 0));
+        QCOMPARE(o.value("offeredMs").toLongLong(), ms(THU, 10, 10, 10));
+        const QVariantList minutes = o.value("minuteMs").toList();
+        const QVariantList st = o.value("steps").toList();
+        const QVariantList bpm = o.value("bpm").toList();
+        // 10:00 .. 10:11, the minutes that are over at 10:12:30
+        QCOMPARE(minutes.size(), 12);
+        QCOMPARE(st.size(), 12);
+        QCOMPARE(bpm.size(), 12);
+        QCOMPARE(minutes.first().toLongLong(), ms(THU, 10, 0));
+        QCOMPARE(minutes.last().toLongLong(), ms(THU, 10, 11));
+        int sum = 0;
+        for (const QVariant &v : st)
+            sum += v.toInt();
+        QCOMPARE(sum, 1200);
+        QCOMPARE(bpm.first().toDouble(), 110.0);
+        // ten minutes after the offer it is still there, a moment later not
+        clock = ms(THU, 10, 20, 10);
+        QVERIFY(!m->exerciseOffer().isEmpty());
+        clock = ms(THU, 10, 20, 11);
+        QVERIFY(m->exerciseOffer().isEmpty());
+    }
+
+    void aWorkoutTakesTheOffer()
+    {
+        HealthMonitor *m = make(ms(THU, 10, 0));
+        steps(THU, 10, 0, 12, 160);
+        clock = ms(THU, 10, 10, 10);
+        m->evaluate();
+        QCOMPARE(m->exerciseOffer().value("activity").toString(), QString("running"));
+        m->setWorkoutActive(true);
+        QVERIFY(m->exerciseOffer().isEmpty());
+        m->setWorkoutActive(false);
+        QVERIFY(m->exerciseOffer().isEmpty());
+    }
+
     // ---- the plugins' readings ----
     void theStepPluginTellsTheMonitorEachReadingsSteps()
     {

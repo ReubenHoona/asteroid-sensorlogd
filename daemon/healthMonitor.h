@@ -18,6 +18,7 @@
 #include <QScopedPointer>
 #include <QSettings>
 #include <QTimer>
+#include <QVariantMap>
 
 #include <MDConfItem>
 
@@ -57,6 +58,14 @@ class HeartrateSensorPlugin;
  *   hrAlerts/lowEnabled (true), hrAlerts/lowBpm (0: none set, stock's default 50)
  *   autoExercise/start (true); autoExercise/stop (true) is "End workout reminders", which the Exercise app reads
  *   for its own "Finished working out?" (WorkoutStore::endReminders; no stop offer here, autoExercise.h)
+ * and the Exercise app's per-type "Start workout reminders": the dconf key /org/asteroidos/exercise/auto-start-off
+ * (the types turned off, comma separated; read at each look).
+ *
+ * The offer last made is kept for the Exercise app (exerciseOffer(), the D-Bus ExerciseOffer): stock starts the
+ * workout of an auto-start prompt at the detected start, not at the tap (ExerciseAutoRecognitionService.java:
+ * AR_START_TIME_DURATION_FROM_BOOT_MS; xux.java: the start Instant is the boot time plus that duration), so the app
+ * asks for the activity's start and the minutes counted since (steps and mean heart rate a minute) to count them
+ * in. It is given for OFFER_VALID_MS after the offer and never once a workout has begun.
  * The steps goal is the dconf key /org/asteroidos/ux/steps-goal (10000), the profile the keys of healthProfile.h.
  *
  * Worn (no reminder to move off the wrist): the sensor hub's off-body sensor when it knows (setOffBody, from the
@@ -81,6 +90,7 @@ public:
     static const int WORN_MS = 15 * 60 * 1000; // a heart rate this recent: the watch is on the wrist
     static const int HISTORY_HOURS = 6;        // minutes before today kept in memory
     static const int SKIN_SETTLE_MS = 3000;    // after the skin temperature stopped: its last batch is in
+    static const int OFFER_VALID_MS = 10 * 60 * 1000; // the offer can start a workout at its start this long
 
     explicit HealthMonitor(QSettings *settings, NotificationPoster *poster, QObject *parent = nullptr);
     ~HealthMonitor() override;
@@ -108,6 +118,10 @@ public:
     bool skinTempSampling() const { return m_skinTempOn; }
     // the time of the next reminder minute, ms since the epoch; -1: none
     qint64 nextReminderMs() const;
+    // the start offer last made, for a workout begun at the activity's start: activity, sinceMs, offeredMs and the
+    // minutes since the start that are over (minuteMs, steps, bpm: lists of one length; bpm 0: no heart rate);
+    // {} when there is none, it is older than OFFER_VALID_MS or a workout began since
+    QVariantMap exerciseOffer() const;
 
     void ingestSteps(qint64 takenMs, int steps);
     void ingestHeart(qint64 takenMs, int bpm);
@@ -169,6 +183,8 @@ private:
     Health::HrAlertDetector m_alerts;
     Health::MoveReminder m_move;
     Health::AutoExercise m_exercise;
+    Health::ExerciseOffer m_offer = {QString(), 0};
+    qint64 m_offeredMs = 0; // when m_offer was made (0: none)
     bool m_workoutActive = false;
     int m_offBody = -1;
     bool m_hrAttached = false;
@@ -181,6 +197,7 @@ private:
     QTimer *m_reminderTimer;
     MDConfItem *m_goalItem;
     MDConfItem *m_twelveHourItem;
+    MDConfItem *m_startOffItem;
     Health::HealthDb *m_store = nullptr;
     QScopedPointer<Health::HealthDb> m_ownStore;
     QScopedPointer<Health::HealthImport> m_import;
