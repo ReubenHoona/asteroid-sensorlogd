@@ -76,8 +76,8 @@ endif()
 # tst_stepcounter and tst_logger test the timer-driven plugins from before the sensor hub's batches (108b628) and
 # are not built until they are brought up to it; tst_heartrate tests the batched heart rate and its database,
 # tst_store the health database and its one-time import, tst_api the daemon's D-Bus methods for it, tst_activity
-# the hub's motion and cadence streams (WO-05).
-foreach(name common heartrate barometer dataloaders health monitor healthloaders store api activity)
+# the hub's motion and cadence streams (WO-05), tst_workouthub the workout latency asked of the hub (WO-08).
+foreach(name common heartrate barometer dataloaders health monitor healthloaders store api activity workouthub)
     add_executable(tst_${name} tst_${name}.cpp testenv.h peek.h)
     target_link_libraries(tst_${name} PRIVATE sensorlogd-undertest)
     if(SENSORLOGD_JUNIT_DIR)

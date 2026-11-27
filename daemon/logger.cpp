@@ -51,6 +51,11 @@ Logger::Logger(QObject *parent)  :
     // before sensorfwd's D-Bus service exists ("There is no sensor manager
     // yet"), so the sensors are set up only once the service is there. A later
     // sensorfwd restart is handled by the backend itself.
+    // the Exercise app's connection: its end (exit, crash, kill) ends the hub's workout mode
+    m_clientWatcher = new QDBusServiceWatcher(QString(), QDBusConnection::sessionBus(),
+                                              QDBusServiceWatcher::WatchForUnregistration, this);
+    connect(m_clientWatcher, &QDBusServiceWatcher::serviceUnregistered, this, &Logger::workoutClientGone);
+
     m_sensorfwWatcher = new QDBusServiceWatcher(sensorfwService, QDBusConnection::systemBus(),
                                                 QDBusServiceWatcher::WatchForRegistration, this);
     connect(m_sensorfwWatcher, &QDBusServiceWatcher::serviceRegistered, this, &Logger::sensorfwRegistered);
@@ -73,6 +78,8 @@ void Logger::sensorfwRegistered() {
         qDebug() << sensorfwService << "is back";
         if (m_activity)
             m_activity->subscribe();
+        if (m_hubWorkout)
+            sendHubWorkout();
         return;
     }
     qDebug() << sensorfwService << "is up";
@@ -129,6 +136,7 @@ void Logger::setup() {
     m_health->start();
 
     qDebug() << "sensorlogd setup complete";
+    updateHubWorkout();
 }
 
 void Logger::resetup() {
@@ -171,8 +179,63 @@ void Logger::healthSettingsChanged() {
 }
 
 void Logger::setWorkoutActive(bool active) {
+    if (active)
+        noteWorkoutClient();
+    m_workoutOn = active;
+    if (!active && !m_workoutClient.isEmpty()) {
+        m_clientWatcher->removeWatchedService(m_workoutClient);
+        m_workoutClient.clear();
+    }
     if (m_health)
         m_health->setWorkoutActive(active);
+    updateHubWorkout();
+}
+
+// the caller of a workout method is the app that runs it (a call from inside this process is no one's)
+void Logger::noteWorkoutClient() {
+    if (!calledFromDBus())
+        return;
+    const QString name = message().service();
+    if (name.isEmpty() || name == m_workoutClient || name == QDBusConnection::sessionBus().baseService())
+        return;
+    if (!m_workoutClient.isEmpty())
+        m_clientWatcher->removeWatchedService(m_workoutClient);
+    m_workoutClient = name;
+    m_clientWatcher->addWatchedService(name);
+    qDebug() << "workout: run by" << name;
+    // it may have left before the watch was there
+    QDBusConnectionInterface *bus = QDBusConnection::sessionBus().interface();
+    if (bus && !bus->isServiceRegistered(name).value())
+        QMetaObject::invokeMethod(this, "workoutClientGone", Qt::QueuedConnection, Q_ARG(QString, name));
+    updateHubWorkout();
+}
+
+void Logger::workoutClientGone(const QString &name) {
+    m_clientWatcher->removeWatchedService(name);
+    if (name != m_workoutClient)
+        return;
+    // the app is gone (it ended, crashed or was killed): the workout stays in health.db for its recovery, but
+    // nobody shows zones now; the batch latency again until the app is back and calls
+    qDebug() << "workout: its app left the bus";
+    m_workoutClient.clear();
+    updateHubWorkout();
+}
+
+void Logger::updateHubWorkout() {
+    const bool want = m_workoutOn && !m_workoutClient.isEmpty() && settings->value("workoutHr/fast", true).toBool();
+    if (want == m_hubWorkout)
+        return;
+    m_hubWorkout = want;
+    sendHubWorkout();
+}
+
+void Logger::sendHubWorkout() {
+    qDebug() << "workout: the sensor hub's workout latency" << (m_hubWorkout ? "on" : "off");
+    QDBusMessage m = QDBusMessage::createMethodCall(sensorfwService, QStringLiteral("/org/eos/usfhub"),
+                                                    QStringLiteral("org.eos.UsfHub"), QStringLiteral("SetWorkoutMode"));
+    m << m_hubWorkout;
+    // no reply waited for: sensorfwd not there yet is fine (sensorfwRegistered sends it again)
+    QDBusConnection::systemBus().send(m);
 }
 
 qlonglong Logger::nextReminderAt() {
@@ -189,6 +252,8 @@ qlonglong Logger::BeginWorkout(qlonglong startMs, const QString &type, const QSt
 bool Logger::AddTrackPoints(qlonglong id, const QList<qlonglong> &points) {
     if (points.size() % 6 != 0)
         return false;
+    if (m_workoutOn)
+        noteWorkoutClient();
     auto clamp = [](qlonglong v, qlonglong lo, qlonglong hi) { return v < lo ? lo : v > hi ? hi : v; };
     QVector<Health::TrackPoint> fixes;
     fixes.reserve(points.size() / 6);
@@ -214,6 +279,8 @@ bool Logger::AddLap(qlonglong id, int n, qlonglong startMs, qlonglong endMs, dou
     lap.distanceM = distanceM;
     lap.avgBpm = avgBpm;
     lap.kind = kind;
+    if (m_workoutOn)
+        noteWorkoutClient();
     return m_store->addLap(id, lap);
 }
 

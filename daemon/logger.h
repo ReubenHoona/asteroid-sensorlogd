@@ -19,6 +19,7 @@
 #include <QString>
 #include <QSettings>
 #include <QDBusAbstractAdaptor>
+#include <QDBusContext>
 #include <QDBusServiceWatcher>
 
 #include "sensorPlugins/stepCounter.h"
@@ -48,9 +49,16 @@
  * again then); nothing is sent when nothing was written.
  *
  * The sensor hub's motion and cadence streams come through activityStreams.h
- * (M4 WO-05), pressure all the time through barometerSensor.h.
+ * (M4 WO-05). While a workout is on and the app that runs it is on the bus
+ * (the caller of the workout methods; a crash or kill ends it), sensorfwd's
+ * hub connection is asked for the workout latency (org.eos.UsfHub
+ * SetWorkoutMode on the system bus, M4 WO-08): heart rate and steps then come
+ * within seconds with the screen off, for the app's zone and target alerts,
+ * instead of in the 45-minute batch; at the workout's end, the app's death or
+ * this daemon's end (the hub watches the caller) the batch latency is back.
+ * Settings: workoutHr/fast (true).
  */
-class Logger : public QObject
+class Logger : public QObject, protected QDBusContext
 {
     Q_OBJECT
     // the D-Bus interface name the clients use; without it Qt names the interface after the
@@ -106,6 +114,7 @@ signals:
 private slots:
     void displayOn(QString displayState);
     void sensorfwRegistered();
+    void workoutClientGone(const QString &name);
 
 private:
     void deletePlugins();
@@ -118,6 +127,14 @@ private:
     bool barometerEnabled = false;
     BarometerSensorPlugin *m_barometerSensor = nullptr;
     ActivityStreamsPlugin *m_activity = nullptr;
+    // M4 WO-08: the app that runs the workout (its session bus name) and the hub's workout mode as asked
+    void noteWorkoutClient();
+    void updateHubWorkout();
+    void sendHubWorkout();
+    bool m_workoutOn = false;
+    QString m_workoutClient;
+    QDBusServiceWatcher *m_clientWatcher = nullptr;
+    bool m_hubWorkout = false;
     DBusNotificationPoster m_poster;
     HealthMonitor *m_health = nullptr;
     Health::HealthDb *m_store = nullptr;
