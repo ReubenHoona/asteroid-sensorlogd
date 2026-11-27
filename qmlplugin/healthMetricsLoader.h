@@ -68,7 +68,8 @@ public:
     // today up to now): [{ date, zoneLight, zoneModerate, zoneVigorous, zonePeak, azm }], the oldest first, the
     // numbers of summary(), from one read of the heart rate database and one of the resting rate
     Q_INVOKABLE QVariantList zoneDays(QDate from, QDate to);
-    // { hoursMet, hoursTotal, hourSteps[24], stepsPerHour }
+    // { hoursMet, hoursTotal, hourSteps[24], stepsPerHour, and the day's longest inactive span (R5 E-21, stock's
+    // "Most inactive today", healthMetrics.h longestInactive): inactiveStartMs, inactiveEndMs, inactiveMin (0: none) }
     Q_INVOKABLE QVariantMap hourly(QDate date);
 
     // the heart rate zones for the profile: [{ name, startBpm, endBpm }], Light first ("Heart rate zones based

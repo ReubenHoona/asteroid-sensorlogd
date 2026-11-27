@@ -156,20 +156,37 @@ QVariantList HealthMetricsLoader::zoneDays(QDate from, QDate to)
     const QList<ZoneMinutes> days = zoneMinutesOfDays(from, to, c.profile, c.resting, c.nowMs);
     for (int i = 0; i < days.size(); i++) {
         const ZoneMinutes &z = days[i];
-        out << QVariantMap{{"date", from.addDays(i)}, {"zoneLight", z.light}, {"zoneModerate", z.moderate},
-                           {"zoneVigorous", z.vigorous}, {"zonePeak", z.peak}, {"azm", z.azm}};
+        // the day's local midnight: a QDate reaches QML as a Date at midnight UTC, the day before west of it
+        out << QVariantMap{{"date", QDateTime(from.addDays(i), QTime(0, 0))}, {"zoneLight", z.light},
+                           {"zoneModerate", z.moderate}, {"zoneVigorous", z.vigorous}, {"zonePeak", z.peak},
+                           {"azm", z.azm}};
     }
     return out;
 }
 
 QVariantMap HealthMetricsLoader::hourly(QDate date)
 {
-    const HourlyActivity h = hourlyActivity(loadDay(date), date);
+    const MinuteSeries series = loadDay(date);
+    const HourlyActivity h = hourlyActivity(series, date);
     QVariantList hourSteps;
     for (int s : h.hourSteps)
         hourSteps << s;
+    // the day's sleep (the night that ended on it, its naps, a night that began on its evening) is not inactive time
+    QList<QPair<qint64, qint64>> asleep;
+    for (const QDate &wake : {date, date.addDays(1)}) {
+        SleepNight n;
+        HealthDb::readNight(healthDbPath(), wake, &n);
+        if (n.valid)
+            asleep << qMakePair(n.main.startMs, n.main.endMs);
+        for (const SleepSession &nap : n.naps)
+            asleep << qMakePair(nap.startMs, nap.endMs);
+    }
+    qint64 from, to;
+    dayRange(date, QDateTime::currentMSecsSinceEpoch(), &from, &to);
+    const InactiveSpan inactive = longestInactive(series, from, to, asleep);
     return QVariantMap{{"hoursMet", h.hoursMet}, {"hoursTotal", h.hoursTotal}, {"hourSteps", hourSteps},
-                       {"stepsPerHour", HOURLY_STEPS}};
+                       {"stepsPerHour", HOURLY_STEPS}, {"inactiveStartMs", (double)inactive.startMs},
+                       {"inactiveEndMs", (double)inactive.endMs}, {"inactiveMin", inactive.minutes}};
 }
 
 QVariantList HealthMetricsLoader::zones()

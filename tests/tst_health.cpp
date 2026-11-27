@@ -478,6 +478,42 @@ private slots:
         QCOMPARE(w.hoursMet, 2); // hours 8 (600) and 11 (300)
     }
 
+    // ---- the most inactive span of a day (R5 E-21, stock's "Most inactive today") ----
+    void theLongestInactiveSpanIsWornStillAndAwake()
+    {
+        MinuteSeries s;
+        fill(s, THU, 8, 0, 30, 0, 64);    // 8:00-8:30 still at the desk: 30
+        fill(s, THU, 8, 30, 10, 80, 90);  // a walk
+        fill(s, THU, 8, 40, 45, 3, 66);   // 8:40-9:25 a few steps a minute, still inactive: 45
+        fill(s, THU, 9, 25, 2, 40, 80);   // up
+        fill(s, THU, 9, 27, 20, 0, 0);    // 9:27-9:47 no reading at all: off the wrist, not inactive
+        fill(s, THU, 9, 47, 15, 0, 62);   // 15 more
+        const qint64 from = ms(THU, 0, 0), to = ms(THU, 12, 0);
+        InactiveSpan i = longestInactive(s, from, to);
+        QCOMPARE(i.minutes, 45);
+        QCOMPARE(i.startMs, ms(THU, 8, 40));
+        QCOMPARE(i.endMs, ms(THU, 9, 25));
+        // a gap of up to 5 minutes between readings is worn (the hub's readings pause when the fit is poor)
+        MinuteSeries g;
+        for (int m = 0; m < 60; m += 5)
+            g.addHr(ms(THU, 13, m), 60);
+        i = longestInactive(g, from, ms(THU, 18, 0));
+        QCOMPARE(i.minutes, 56); // 13:00 to the last reading at 13:55
+        // sleep is not inactive: a nap 8:50-9:10 splits the 45
+        i = longestInactive(s, from, to, {qMakePair(ms(THU, 8, 50), ms(THU, 9, 10))});
+        QCOMPARE(i.minutes, 30);
+        QCOMPARE(i.startMs, ms(THU, 8, 0));
+        // under 10 minutes: none; the minute of `to` is not over
+        MinuteSeries short_;
+        fill(short_, THU, 10, 0, 9, 0, 60);
+        QCOMPARE(longestInactive(short_, from, to).minutes, 0);
+        fill(short_, THU, 10, 9, 20, 0, 60);
+        i = longestInactive(short_, from, ms(THU, 10, 15, 30));
+        QCOMPARE(i.minutes, 15);
+        QCOMPARE(i.endMs, ms(THU, 10, 15));
+        QCOMPARE(longestInactive(MinuteSeries(), from, to).minutes, 0);
+    }
+
     // ---- high and low heart rate alerts ----
     void aTenMinuteRunAboveTheHighThresholdAlertsOnce()
     {

@@ -258,6 +258,39 @@ private slots:
         QCOMPARE(MGConfItem::testCreated() - before, 2 * HealthProfile::keys().size());
     }
 
+    // R5 E-21: the hourly page's "Most inactive today" from the day's files, the day's sleep left out
+    void theHourlyActivityHasTheDaysMostInactiveSpan()
+    {
+        const QDate d = day();
+        testenv::writeDay("stepCounter", d, rec(ms(d, 9, 0), 0) + rec(ms(d, 12, 0), 0));
+        addHeart(d, 9, 0, 40, 62);  // 9:00-9:40, no steps
+        addHeart(d, 10, 0, 25, 64); // 10:00-10:25
+        HealthMetricsLoader loader;
+        QVariantMap h = loader.hourly(d);
+        QCOMPARE(h["inactiveMin"].toInt(), 40);
+        QCOMPARE((qint64)h["inactiveStartMs"].toDouble(), ms(d, 9, 0));
+        QCOMPARE((qint64)h["inactiveEndMs"].toDouble(), ms(d, 9, 40));
+        // a nap stored for the day over 9:10-9:30: the longest is 10:00-10:25 now
+        HealthDb store(healthDbPath());
+        SleepNight n;
+        n.wakeDate = d;
+        n.valid = true;
+        n.main.startMs = ms(d.addDays(-1), 23, 0);
+        n.main.endMs = ms(d, 6, 30);
+        n.main.asleepMin = 400;
+        SleepSession nap;
+        nap.startMs = ms(d, 9, 10);
+        nap.endMs = ms(d, 9, 30);
+        nap.asleepMin = 20;
+        n.naps << nap;
+        QVERIFY(store.storeNight(n, "test"));
+        h = loader.hourly(d);
+        QCOMPARE(h["inactiveMin"].toInt(), 25);
+        QCOMPARE((qint64)h["inactiveStartMs"].toDouble(), ms(d, 10, 0));
+        // a day with nothing worn: none
+        QCOMPARE(loader.hourly(d.addDays(-3))["inactiveMin"].toInt(), 0);
+    }
+
     // R5 E-18: the main goal for the Health app's ring; its keys watched
     void theMainGoalIsReadAndItsKeysWatched()
     {

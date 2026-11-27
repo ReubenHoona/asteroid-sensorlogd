@@ -239,6 +239,57 @@ int floorsClimbed(const QList<QPointF> &pressure, const MinuteSeries &steps)
     return (int)std::floor(gain / FLOOR_M);
 }
 
+InactiveSpan longestInactive(const MinuteSeries &series, qint64 fromMs, qint64 toMs,
+                             const QList<QPair<qint64, qint64>> &asleep)
+{
+    InactiveSpan best;
+    const qint64 first = MinuteSeries::minuteOf(fromMs);
+    const qint64 end = MinuteSeries::minuteOf(toMs); // the minute toMs is in is not over
+    if (end <= first)
+        return best;
+    // the minutes with a reading, to tell worn ones by their neighbours
+    QVector<qint64> readings;
+    for (auto it = series.data().lowerBound(first - INACTIVE_REACH_MIN);
+         it != series.data().constEnd() && it.key() < end + INACTIVE_REACH_MIN; ++it)
+        if (it->hr > 0)
+            readings << it.key();
+    auto worn = [&](qint64 minute) {
+        auto i = std::lower_bound(readings.constBegin(), readings.constEnd(), minute);
+        if (i != readings.constEnd() && *i == minute)
+            return true;
+        const bool after = i != readings.constEnd() && *i - minute <= INACTIVE_REACH_MIN;
+        const bool before = i != readings.constBegin() && minute - *(i - 1) <= INACTIVE_REACH_MIN;
+        return before && after;
+    };
+    auto sleeping = [&](qint64 minute) {
+        const qint64 ms = MinuteSeries::msOf(minute);
+        for (const auto &s : asleep)
+            if (ms + 60000 > s.first && ms < s.second)
+                return true;
+        return false;
+    };
+    qint64 runStart = -1;
+    auto close = [&](qint64 runEnd) {
+        if (runStart >= 0 && runEnd - runStart > best.minutes) {
+            best.minutes = (int)(runEnd - runStart);
+            best.startMs = MinuteSeries::msOf(runStart);
+            best.endMs = MinuteSeries::msOf(runEnd);
+        }
+        runStart = -1;
+    };
+    for (qint64 minute = first; minute < end; minute++) {
+        const bool inactive = series.at(minute).steps < INACTIVE_STEPS && worn(minute) && !sleeping(minute);
+        if (inactive && runStart < 0)
+            runStart = minute;
+        else if (!inactive)
+            close(minute);
+    }
+    close(end);
+    if (best.minutes < INACTIVE_MIN_SPAN)
+        best = InactiveSpan();
+    return best;
+}
+
 HourlyActivity hourlyActivity(const MinuteSeries &series, const QDate &day, int firstHour, int endHour, int stepsPerHour)
 {
     HourlyActivity h;

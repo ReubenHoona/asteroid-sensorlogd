@@ -133,6 +133,23 @@ HourlyActivity hourlyActivity(const MinuteSeries &series, const QDate &day, int 
 static const int HOURLY_STEPS = 250;
 static const int AZM_WEEKLY_GOAL = 150;
 
+// The longest inactive span of a day (R5 E-21): stock's hourly activity page shows "Most inactive today" with its
+// times and length (yum.java:425-433, 0x7f14099c): the day's longest SEDENTARY_PERIOD of Health Services (one.java:
+// MAX(duration) of the day's sedentary periods), which the hub makes. Ours (guess): the longest run of minutes of
+// [fromMs, toMs) that are worn (a heart rate reading in the minute, or readings within INACTIVE_REACH_MIN before and
+// after it), have fewer than INACTIVE_STEPS steps (the heart rate alerts' inactive minute) and are not inside one of
+// `asleep` (the sleep sessions: sleep is not sedentary); none under INACTIVE_MIN_SPAN minutes (minutes = 0).
+struct InactiveSpan {
+    qint64 startMs = 0;
+    qint64 endMs = 0;
+    int minutes = 0;
+};
+static const int INACTIVE_STEPS = 10;
+static const int INACTIVE_REACH_MIN = 5;
+static const int INACTIVE_MIN_SPAN = 10;
+InactiveSpan longestInactive(const MinuteSeries &series, qint64 fromMs, qint64 toMs,
+                             const QList<QPair<qint64, qint64>> &asleep = {});
+
 } // namespace Health
 
 #endif // HEALTHMETRICS_H
