@@ -179,6 +179,10 @@ public:
     // ---- readers: a connection of their own, read only (a database that is not there gives nothing) ----
     static qint64 readSeq(const QString &path);
     static QVariant readMeta(const QString &path, const QString &key);
+    // How many rows of each kind, no values (for checks on the watch): schema, seq, workouts, workoutsDeleted,
+    // workoutsImported, trackPoints, laps, pauses, nights, sleepSessions, sleepImported, days, daysClosed,
+    // daysResting, and import.sleep, import.exercise, import.resting, import.daily (1: done). {} without a database.
+    static QVariantMap readCounts(const QString &path);
     // the workouts that began in [fromMs, toMs), newest first (deleted ones left out)
     static QList<WorkoutRecord> readWorkouts(const QString &path, qint64 fromMs, qint64 toMs, int limit = -1);
     static bool readWorkout(const QString &path, qint64 id, WorkoutRecord *workout, QVector<LapRecord> *laps = nullptr,

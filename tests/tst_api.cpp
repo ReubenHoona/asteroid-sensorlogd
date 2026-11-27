@@ -155,6 +155,21 @@ private slots:
         QCOMPARE(page.rows.size(), 2);
         QCOMPARE(page.rows.last()["id"].toLongLong(), id.value());
         QCOMPARE(page.rows.last()["deleted"].toLongLong(), 1LL);
+
+        // the counts for a check on the watch: numbers only
+        QDBusReply<QVariantMap> counts = iface->call("HealthCounts");
+        QVERIFY2(counts.isValid(), qPrintable(counts.error().message()));
+        const QVariantMap c = counts.value();
+        QCOMPARE(c["schema"].toLongLong(), 1LL);
+        QCOMPARE(c["seq"].toLongLong(), logger->HealthSeq());
+        QCOMPARE(c["workouts"].toLongLong(), 1LL);
+        QCOMPARE(c["workoutsDeleted"].toLongLong(), 1LL);
+        QCOMPARE(c["workoutsImported"].toLongLong(), 0LL);
+        QCOMPARE(c["trackPoints"].toLongLong(), 0LL); // went with the deleted workout
+        QCOMPARE(c["nights"].toLongLong(), 0LL);
+        QCOMPARE(c["days"].toLongLong(), 0LL);
+        for (auto it = c.constBegin(); it != c.constEnd(); ++it)
+            QCOMPARE(it.value().typeId(), (int)QMetaType::LongLong);
     }
 
     void badCallsAreRefusedAndChangeNothing()

@@ -758,6 +758,39 @@ QVariant HealthDb::readMeta(const QString &path, const QString &key)
     return q.ok() && q.row() ? q.value(0) : QVariant();
 }
 
+QVariantMap HealthDb::readCounts(const QString &path)
+{
+    QVariantMap out;
+    ReadConn c(path);
+    if (!c.db())
+        return out;
+    static const char *const queries[][2] = {
+        {"schema", "PRAGMA user_version"},
+        {"seq", "SELECT value FROM meta WHERE key = 'seq'"},
+        {"workouts", "SELECT COUNT(*) FROM workout WHERE deleted = 0"},
+        {"workoutsDeleted", "SELECT COUNT(*) FROM workout WHERE deleted = 1"},
+        {"workoutsImported", "SELECT COUNT(*) FROM workout WHERE imported_from IS NOT NULL"},
+        {"trackPoints", "SELECT COUNT(*) FROM workout_track"},
+        {"laps", "SELECT COUNT(*) FROM workout_lap"},
+        {"pauses", "SELECT COUNT(*) FROM workout_pause"},
+        {"nights", "SELECT COUNT(DISTINCT wake_date) FROM sleep_session WHERE deleted = 0 AND main = 1"},
+        {"sleepSessions", "SELECT COUNT(*) FROM sleep_session WHERE deleted = 0"},
+        {"sleepImported", "SELECT COUNT(*) FROM sleep_session WHERE imported_from IS NOT NULL"},
+        {"days", "SELECT COUNT(*) FROM daily"},
+        {"daysClosed", "SELECT COUNT(*) FROM daily WHERE closed_ms IS NOT NULL"},
+        {"daysResting", "SELECT COUNT(*) FROM daily WHERE resting_hr IS NOT NULL"},
+        {"import.sleep", "SELECT value FROM meta WHERE key = 'import.sleep'"},
+        {"import.exercise", "SELECT value FROM meta WHERE key = 'import.exercise'"},
+        {"import.resting", "SELECT value FROM meta WHERE key = 'import.resting'"},
+        {"import.daily", "SELECT value FROM meta WHERE key = 'import.daily'"},
+    };
+    for (const auto &q : queries) {
+        Stmt s(c.db(), q[1]);
+        out.insert(QString::fromLatin1(q[0]), s.ok() && s.row() ? (qlonglong)s.i64(0) : 0LL);
+    }
+    return out;
+}
+
 QList<WorkoutRecord> HealthDb::readWorkouts(const QString &path, qint64 fromMs, qint64 toMs, int limit)
 {
     QList<WorkoutRecord> out;

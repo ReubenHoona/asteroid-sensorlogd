@@ -83,6 +83,8 @@ public slots:
     bool DeleteWorkout(qlonglong id);
     // the change counter of health.db
     qlonglong HealthSeq();
+    // how many rows of each kind health.db has, no values (HealthDb::readCounts): for checks on the watch
+    QVariantMap HealthCounts();
 signals:
     // the steps goal was reached for the first time today (metric "steps")
     void goalReached(const QString &metric, int value, int goal);

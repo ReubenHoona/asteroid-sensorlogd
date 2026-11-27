@@ -239,6 +239,10 @@ qlonglong Logger::HealthSeq() {
     return m_store->seq();
 }
 
+QVariantMap Logger::HealthCounts() {
+    return Health::HealthDb::readCounts(m_store->path());
+}
+
 void Logger::triggerRecording() {
     if (heartrateSensorEnabled) {
         m_heartrateSensor->triggerRecording();
