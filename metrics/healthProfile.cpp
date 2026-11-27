@@ -54,11 +54,20 @@ HealthProfile HealthProfile::fromValues(const QVariant &gender, const QVariant &
     return p;
 }
 
+int HealthProfile::sleepGoalFrom(const QVariant &minutes)
+{
+    bool ok = false;
+    const int m = minutes.toInt(&ok);
+    return ok && m >= 60 && m <= 1440 ? m : 480;
+}
+
 HealthProfile HealthProfile::load(const QDate &today)
 {
     auto get = [](const char *key) { return MDConfItem(QString(PROFILE) + key).value(); };
-    return fromValues(get("gender"), get("height-cm"), get("weight-kg"), get("birth-date"), get("age"),
-                      get("resting-hr"), today);
+    HealthProfile p = fromValues(get("gender"), get("height-cm"), get("weight-kg"), get("birth-date"), get("age"),
+                                 get("resting-hr"), today);
+    p.sleepGoalMin = sleepGoalFrom(MDConfItem(QStringLiteral("/org/asteroidos/ux/sleep-goal")).value());
+    return p;
 }
 
 } // namespace Health

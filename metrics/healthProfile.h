@@ -26,9 +26,13 @@ namespace Health {
  *   /org/asteroidos/health/profile/birth-date  s  ISO yyyy-MM-dd; else
  *   /org/asteroidos/health/profile/age         i  years
  *   /org/asteroidos/health/profile/resting-hr  i  bpm; 0 or unset: the daily estimates (restingHr.h)
+ *   /org/asteroidos/ux/sleep-goal              i  minutes a night, 60 to 1440 (the sleep score's duration part
+ *                                                 and "goal met"); stock sets it in the phone app, here
+ *                                                 asteroid-btsyncd writes it from Gadgetbridge (M4 WO-11)
  *
- * Anything unset takes a neutral value (170 cm, 70 kg, 30 years, no gender), so that the numbers exist before
- * the profile is filled in.
+ * Anything unset takes a neutral value (170 cm, 70 kg, 30 years, no gender, 480 minutes of sleep), so that the
+ * numbers exist before the profile is filled in. asteroid-btsyncd also writes the four keys of Settings and the
+ * birth date from the phone's profile.
  */
 struct HealthProfile {
     enum Sex { Unspecified, Male, Female };
@@ -38,6 +42,7 @@ struct HealthProfile {
     double weightKg = 70;
     int age = 30;
     int restingHr = 0; // 0: not set
+    int sleepGoalMin = 480;
 
     // the maximum heart rate stock's zones use: 220 minus the age
     int maxHr() const { return 220 - age; }
@@ -48,6 +53,8 @@ struct HealthProfile {
     static HealthProfile fromValues(const QVariant &gender, const QVariant &heightCm, const QVariant &weightKg,
                                     const QVariant &birthDate, const QVariant &age, const QVariant &restingHr,
                                     const QDate &today);
+    // the sleep goal from the key's raw value (invalid QVariant: unset)
+    static int sleepGoalFrom(const QVariant &minutes);
 };
 
 } // namespace Health

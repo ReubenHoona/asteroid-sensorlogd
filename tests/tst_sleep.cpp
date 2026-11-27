@@ -339,6 +339,15 @@ private slots:
         QVERIFY(!n.goalMet);
         QVERIFY(n.score < 75); // the duration gives 50 x 210 / 480 at most
         QVERIFY(n.score >= 0);
+        QCOMPARE(n.goalMin, 480);
+        // the same night against a sleep goal of 200 minutes (the phone's, M4 WO-11): met, a full duration part
+        HealthProfile p = profile();
+        p.sleepGoalMin = 200;
+        const SleepNight withGoal = estimateNight(THU, p, 56);
+        QCOMPARE(withGoal.goalMin, 200);
+        QVERIFY(withGoal.goalMet);
+        QVERIFY(withGoal.score > n.score);
+        QCOMPARE(withGoal.main.asleepMin, n.main.asleepMin);
     }
 
     void napsOfTwentyMinutesAndMore()

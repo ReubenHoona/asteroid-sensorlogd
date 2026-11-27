@@ -185,7 +185,7 @@ SleepNight estimateNight(const QDate &wakeDate, const HealthProfile &profile, in
     const qint64 to = QDateTime(wakeDate, QTime(18, 0)).toMSecsSinceEpoch();
     // no heart rate off the wrist (M4 WO-03): a reading from then is not the wearer's
     loadHeartRate(series, from, to, offWristRanges(from, to));
-    return estimateSleep(series, wakeDate, profile, restingHr, 480, loadSleepContext(wakeDate));
+    return estimateSleep(series, wakeDate, profile, restingHr, profile.sleepGoalMin, loadSleepContext(wakeDate));
 }
 
 bool loadStoredSleep(const QDate &wakeDate, SleepNight *night)

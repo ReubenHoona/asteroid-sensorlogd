@@ -107,7 +107,21 @@ private slots:
         QCOMPARE(p.heightCm, 181.0);
         QCOMPARE(p.weightKg, 77.5);
         QCOMPARE(p.age, 40);
+        QCOMPARE(p.sleepGoalMin, 480); // no sleep goal key
+        MGConfItem::setTestValue("/org/asteroidos/ux/sleep-goal", 420); // from the phone (M4 WO-11)
+        QCOMPARE(HealthProfile::load(THU).sleepGoalMin, 420);
         MGConfItem::clearTestValues();
+    }
+
+    void sleepGoalKeepsItsRange()
+    {
+        QCOMPARE(HealthProfile().sleepGoalMin, 480);
+        QCOMPARE(HealthProfile::sleepGoalFrom(QVariant()), 480);
+        QCOMPARE(HealthProfile::sleepGoalFrom(60), 60);
+        QCOMPARE(HealthProfile::sleepGoalFrom(1440), 1440);
+        QCOMPARE(HealthProfile::sleepGoalFrom(59), 480);
+        QCOMPARE(HealthProfile::sleepGoalFrom(1441), 480);
+        QCOMPARE(HealthProfile::sleepGoalFrom("seven hours"), 480);
     }
 
     // ---- distance and energy ----
