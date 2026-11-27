@@ -28,8 +28,9 @@ namespace Health {
  * (RestingHeartRateDetailsViewModel.java:57); the value comes from the cloud (restingHeartRate/dailySummaries), so
  * its method is not on the watch. Ours, a guess at it, documented as ours:
  *
- *   A resting minute is a minute the watch was worn (it has heart rate readings of medium accuracy or better), with
- *   no step in it or in the RESTING_STILL_MIN minutes before it, and no workout on. Sleep makes up most of them,
+ *   A resting minute is a minute the watch was worn (it has heart rate readings of medium accuracy or better, and
+ *   the off-body sensor did not say off the wrist: M4 WO-03), with no step in it or in the RESTING_STILL_MIN minutes
+ *   before it, and no workout on. Sleep makes up most of them,
  *   the still awake minutes the rest. The day's resting heart rate is the median of the resting minutes' heart
  *   rates over 24 hours, rounded, kept within 30-120; with fewer than RESTING_MIN_MINUTES resting minutes there is
  *   none.
@@ -47,8 +48,8 @@ static const int RESTING_STILL_MIN = 10;   // no step in the minute or the 10 be
 static const int RESTING_MIN_MINUTES = 60; // fewer resting minutes: no estimate
 
 // The resting heart rate of the minutes of [fromMs, toMs) of the series (which should have the steps of the
-// RESTING_STILL_MIN minutes before fromMs too); the minutes in an excluded range [first, second) (a workout) do
-// not count. 0: fewer than RESTING_MIN_MINUTES resting minutes.
+// RESTING_STILL_MIN minutes before fromMs too); the minutes in an excluded range [first, second) (a workout, the
+// watch off the wrist) do not count. 0: fewer than RESTING_MIN_MINUTES resting minutes.
 int restingHrOfMinutes(const MinuteSeries &series, qint64 fromMs, qint64 toMs,
                        const QList<QPair<qint64, qint64>> &excluded = {});
 
@@ -56,7 +57,8 @@ int restingHrOfMinutes(const MinuteSeries &series, qint64 fromMs, qint64 toMs,
 // local day itself
 QPair<qint64, qint64> restingWindow(const QDate &day, qint64 nightEndMs);
 
-// The estimate of the day from what is logged: the step day files, heartrate.db and the workouts of health.db
+// The estimate of the day from what is logged: the step day files, heartrate.db, the off-body records and the workouts
+// of health.db
 int estimateRestingHrForDay(const QDate &day, qint64 nightEndMs);
 
 } // namespace Health

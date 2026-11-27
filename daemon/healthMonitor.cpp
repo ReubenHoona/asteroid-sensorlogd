@@ -196,6 +196,11 @@ void HealthMonitor::ingestHeart(qint64 takenMs, int bpm)
 
 bool HealthMonitor::worn(qint64 nowMs) const
 {
+    // the off-body sensor when it knows (M4 WO-03)
+    if (m_offBody == 0)
+        return true;
+    if (m_offBody == 1)
+        return false;
     return !m_hrAttached || (m_lastHrMs > 0 && nowMs - m_lastHrMs <= WORN_MS);
 }
 

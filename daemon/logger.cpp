@@ -78,6 +78,8 @@ void Logger::sensorfwRegistered() {
         qDebug() << sensorfwService << "is back";
         if (m_activity)
             m_activity->subscribe();
+        if (m_offBody)
+            m_offBody->query();
         if (m_hubWorkout)
             sendHubWorkout();
         return;
@@ -97,6 +99,8 @@ void Logger::deletePlugins() {
     m_barometerSensor = nullptr;
     delete m_activity;
     m_activity = nullptr;
+    delete m_offBody;
+    m_offBody = nullptr;
 }
 
 void Logger::setup() {
@@ -110,6 +114,7 @@ void Logger::setup() {
     stepCounterEnabled = this->settings->value("stepCounter/enabled",true).toBool();
     barometerEnabled = this->settings->value("barometer/enabled",true).toBool();
     const bool activityEnabled = this->settings->value("activity/enabled", true).toBool();
+    const bool offBodyEnabled = this->settings->value("offBody/enabled", true).toBool();
 
     // heart rate: one record per interval at rest (Wear OS-like, 5-10 min)
     if (heartrateSensorEnabled) {
@@ -128,11 +133,19 @@ void Logger::setup() {
     if (activityEnabled)
         m_activity = new ActivityStreamsPlugin(this);
 
+    // the wrist (M4 WO-03): the hub's off-body sensor
+    if (offBodyEnabled)
+        m_offBody = new OffBodyPlugin(this);
+
     m_health = new HealthMonitor(settings, &m_poster, this);
     m_health->setStore(m_store);
     m_health->attach(m_stepCounter, m_heartrateSensor);
     connect(m_health, &HealthMonitor::goalReached, this, &Logger::goalReached);
     connect(m_health, &HealthMonitor::exerciseOffered, this, &Logger::ExerciseOffered);
+    if (m_offBody) {
+        m_health->setOffBody(m_offBody->state());
+        connect(m_offBody, &OffBodyPlugin::changed, m_health, &HealthMonitor::setOffBody);
+    }
     m_health->start();
 
     qDebug() << "sensorlogd setup complete";

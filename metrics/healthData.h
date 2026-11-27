@@ -12,7 +12,9 @@
 
 #include <QDate>
 #include <QList>
+#include <QPair>
 #include <QPointF>
+#include <QString>
 
 #include "healthMetrics.h"
 #include "sleepEstimator.h"
@@ -30,12 +32,21 @@ qint64 stepIntervalMs();
 
 // adds the steps of the day's file to the series
 void loadSteps(MinuteSeries &series, const QDate &day);
-// adds the heart rate of [fromMs, toMs) from the database (readings of medium accuracy and better)
-void loadHeartRate(MinuteSeries &series, qint64 fromMs, qint64 toMs);
+// adds the heart rate of [fromMs, toMs) from the database (readings of medium accuracy and better); the minutes that
+// touch a range of `skip` (the watch off the wrist: offWristRanges) are left out
+void loadHeartRate(MinuteSeries &series, qint64 fromMs, qint64 toMs, const QList<QPair<qint64, qint64>> &skip = {});
 // steps and heart rate of the local day
 MinuteSeries loadDay(const QDate &day);
 // the barometer records of the day (time in seconds, pressure)
 QList<QPointF> loadPressure(const QDate &day);
+
+// The records of a stream that logs the changes of a state (offBody/, motion/): the last one before fromMs (looked for
+// in the day files up to lookBackDays before fromMs's day) and those of [fromMs, toMs), in time order (seconds since
+// the epoch, value)
+QList<QPointF> loadStateRecords(const QString &prefix, qint64 fromMs, qint64 toMs, int lookBackDays = 7);
+// The ranges [first, second) of [fromMs, toMs) in which the off-body sensor said the watch was off the wrist
+// (offBody/, M4 WO-03). Where it did not know (before WO-03, the provider off) there is none: the heart rate tells.
+QList<QPair<qint64, qint64>> offWristRanges(qint64 fromMs, qint64 toMs);
 
 // The resting heart rate in force: the mean of the daily estimates (health.db daily.resting_hr, restingHr.h) of
 // the last `days` local days up to the one of nowMs, rounded (0: none of them has one)

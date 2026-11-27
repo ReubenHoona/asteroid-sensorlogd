@@ -46,6 +46,7 @@ add_library(sensorlogd-undertest STATIC
     ${top}/daemon/sensorPlugins/heartrateDb.cpp ${top}/daemon/sensorPlugins/heartrateDb.h
     ${top}/daemon/sensorPlugins/barometerSensor.cpp ${top}/daemon/sensorPlugins/barometerSensor.h
     ${top}/daemon/sensorPlugins/activityStreams.cpp ${top}/daemon/sensorPlugins/activityStreams.h
+    ${top}/daemon/sensorPlugins/offBody.cpp ${top}/daemon/sensorPlugins/offBody.h
     ${top}/qmlplugin/stepsDataLoader.cpp ${top}/qmlplugin/stepsDataLoader.h
     ${top}/qmlplugin/hrDataLoader.cpp ${top}/qmlplugin/hrDataLoader.h
     ${top}/qmlplugin/weightDataLoader.cpp ${top}/qmlplugin/weightDataLoader.h
@@ -76,8 +77,9 @@ endif()
 # tst_stepcounter and tst_logger test the timer-driven plugins from before the sensor hub's batches (108b628) and
 # are not built until they are brought up to it; tst_heartrate tests the batched heart rate and its database,
 # tst_store the health database and its one-time import, tst_api the daemon's D-Bus methods for it, tst_activity
-# the hub's motion and cadence streams (WO-05), tst_workouthub the workout latency asked of the hub (WO-08).
-foreach(name common heartrate barometer dataloaders health monitor healthloaders store api activity workouthub)
+# the hub's motion and cadence streams (WO-05), tst_workouthub the workout latency asked of the hub (WO-08),
+# tst_offbody the hub's off-body state, the monitor's worn() and what is left out off the wrist (WO-03).
+foreach(name common heartrate barometer dataloaders health monitor healthloaders store api activity workouthub offbody)
     add_executable(tst_${name} tst_${name}.cpp testenv.h peek.h)
     target_link_libraries(tst_${name} PRIVATE sensorlogd-undertest)
     if(SENSORLOGD_JUNIT_DIR)

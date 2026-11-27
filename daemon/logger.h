@@ -26,6 +26,7 @@
 #include "sensorPlugins/heartrateSensor.h"
 #include "sensorPlugins/barometerSensor.h"
 #include "sensorPlugins/activityStreams.h"
+#include "sensorPlugins/offBody.h"
 #include "healthMonitor.h"
 #include "healthNotifier.h"
 #include "../store/healthDb.h"
@@ -57,6 +58,10 @@
  * instead of in the 45-minute batch; at the workout's end, the app's death or
  * this daemon's end (the hub watches the caller) the batch latency is back.
  * Settings: workoutHr/fast (true).
+ *
+ * The wrist comes from the hub's off-body sensor (offBody.h, M4 WO-03): its
+ * changes in offBody/, the Health monitor's "worn" from it. Settings:
+ * offBody/enabled (true).
  */
 class Logger : public QObject, protected QDBusContext
 {
@@ -127,6 +132,7 @@ private:
     bool barometerEnabled = false;
     BarometerSensorPlugin *m_barometerSensor = nullptr;
     ActivityStreamsPlugin *m_activity = nullptr;
+    OffBodyPlugin *m_offBody = nullptr;
     // M4 WO-08: the app that runs the workout (its session bus name) and the hub's workout mode as asked
     void noteWorkoutClient();
     void updateHubWorkout();

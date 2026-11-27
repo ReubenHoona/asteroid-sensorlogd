@@ -13,6 +13,8 @@ add_executable(
     sensorPlugins/barometerSensor.h
     sensorPlugins/activityStreams.cpp
     sensorPlugins/activityStreams.h
+    sensorPlugins/offBody.cpp
+    sensorPlugins/offBody.h
     sensorPlugins/sampleTime.h
     healthMonitor.cpp
     healthMonitor.h

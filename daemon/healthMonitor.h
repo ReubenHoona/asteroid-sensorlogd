@@ -54,6 +54,11 @@ class HeartrateSensorPlugin;
  *   hrAlerts/lowEnabled (true), hrAlerts/lowBpm (0: none set, stock's default 50)
  *   autoExercise/start (true), autoExercise/stop (true)
  * The steps goal is the dconf key /org/asteroidos/ux/steps-goal (10000), the profile the keys of healthProfile.h.
+ *
+ * Worn (no reminder to move off the wrist): the sensor hub's off-body sensor when it knows (setOffBody, from the
+ * logger's OffBodyPlugin, M4 WO-03; stock gates on it too: sysui's LlobDetector, the hub's algorithms); when it does
+ * not (the provider off in eos-usf.conf, an older sensorfwd, the hub not up), a heart rate within WORN_MS, as
+ * before (the hub measures only on the wrist).
  */
 class HealthMonitor : public QObject
 {
@@ -84,6 +89,8 @@ public:
     void displayOn();
     // the Exercise app has a workout going (for the "Finished working out?" prompt)
     void setWorkoutActive(bool active);
+    // the off-body sensor's state (OffBodyPlugin): -1 unknown, 0 on the wrist, 1 off it
+    void setOffBody(int state) { m_offBody = state; }
     // the time of the next reminder minute, ms since the epoch; -1: none
     qint64 nextReminderMs() const;
 
@@ -142,6 +149,7 @@ private:
     Health::MoveReminder m_move;
     Health::AutoExercise m_exercise;
     bool m_workoutActive = false;
+    int m_offBody = -1;
     bool m_hrAttached = false;
     qint64 m_lastHrMs = 0;
     qint64 m_lastLiveMinute = -1;

@@ -7,6 +7,7 @@
  * You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
 #include <cmath>
 
 #include <QDateTime>
@@ -34,10 +35,16 @@ void loadSteps(MinuteSeries &series, const QDate &day)
     series.addStepRecords(readDayRecords(fileNameForDate(day, "stepCounter")), stepIntervalMs());
 }
 
-void loadHeartRate(MinuteSeries &series, qint64 fromMs, qint64 toMs)
+void loadHeartRate(MinuteSeries &series, qint64 fromMs, qint64 toMs, const QList<QPair<qint64, qint64>> &skip)
 {
-    for (const HeartrateDb::MinuteMean &m : HeartrateDb::minuteMeans(heartrateDbPath(), fromMs, toMs))
-        series.addHrMinute({m.minute, m.bpm, m.count});
+    for (const HeartrateDb::MinuteMean &m : HeartrateDb::minuteMeans(heartrateDbPath(), fromMs, toMs)) {
+        const qint64 ms = MinuteSeries::msOf(m.minute);
+        bool off = false;
+        for (const QPair<qint64, qint64> &r : skip)
+            off = off || (ms + 60000 > r.first && ms < r.second);
+        if (!off)
+            series.addHrMinute({m.minute, m.bpm, m.count});
+    }
 }
 
 MinuteSeries loadDay(const QDate &day)
@@ -52,6 +59,55 @@ MinuteSeries loadDay(const QDate &day)
 QList<QPointF> loadPressure(const QDate &day)
 {
     return readDayRecords(fileNameForDate(day, "barometer-raw"));
+}
+
+QList<QPointF> loadStateRecords(const QString &prefix, qint64 fromMs, qint64 toMs, int lookBackDays)
+{
+    QList<QPointF> out;
+    const double fromS = fromMs / 1000.0, toS = toMs / 1000.0;
+    const QDate first = QDateTime::fromMSecsSinceEpoch(fromMs).date();
+    const QDate last = QDateTime::fromMSecsSinceEpoch(qMax(fromMs, toMs - 1)).date();
+    // the state at fromMs: the latest record before it, from fromMs's day back
+    for (int back = 0; back <= qMax(0, lookBackDays); back++) {
+        bool found = false;
+        QPointF before;
+        for (const QPointF &p : readDayRecords(fileNameForDate(first.addDays(-back), prefix))) {
+            if (p.x() < fromS && (!found || p.x() >= before.x())) {
+                before = p;
+                found = true;
+            }
+        }
+        if (found) {
+            out.append(before);
+            break;
+        }
+    }
+    for (QDate d = first; d <= last; d = d.addDays(1))
+        for (const QPointF &p : readDayRecords(fileNameForDate(d, prefix)))
+            if (p.x() >= fromS && p.x() < toS)
+                out.append(p);
+    std::stable_sort(out.begin(), out.end(), [](const QPointF &a, const QPointF &b) { return a.x() < b.x(); });
+    return out;
+}
+
+QList<QPair<qint64, qint64>> offWristRanges(qint64 fromMs, qint64 toMs)
+{
+    QList<QPair<qint64, qint64>> out;
+    qint64 offSince = -1;
+    for (const QPointF &p : loadStateRecords(QStringLiteral("offBody"), fromMs, toMs)) {
+        const qint64 t = qMax(fromMs, (qint64)std::llround(p.x()) * 1000);
+        if (std::lround(p.y()) == 1) {
+            if (offSince < 0)
+                offSince = t;
+        } else if (offSince >= 0) {
+            if (t > offSince)
+                out.append({offSince, t});
+            offSince = -1;
+        }
+    }
+    if (offSince >= 0 && toMs > offSince)
+        out.append({offSince, toMs});
+    return out;
 }
 
 int estimatedRestingHr(qint64 nowMs, int days)
@@ -101,8 +157,10 @@ SleepNight estimateNight(const QDate &wakeDate, const HealthProfile &profile, in
     MinuteSeries series;
     loadSteps(series, wakeDate.addDays(-1));
     loadSteps(series, wakeDate);
-    loadHeartRate(series, QDateTime(wakeDate.addDays(-1), QTime(18, 0)).toMSecsSinceEpoch(),
-                  QDateTime(wakeDate, QTime(18, 0)).toMSecsSinceEpoch());
+    const qint64 from = QDateTime(wakeDate.addDays(-1), QTime(18, 0)).toMSecsSinceEpoch();
+    const qint64 to = QDateTime(wakeDate, QTime(18, 0)).toMSecsSinceEpoch();
+    // no heart rate off the wrist (M4 WO-03): a reading from then is not the wearer's
+    loadHeartRate(series, from, to, offWristRanges(from, to));
     return estimateSleep(series, wakeDate, profile, restingHr);
 }
 

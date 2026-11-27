@@ -72,6 +72,8 @@ int estimateRestingHrForDay(const QDate &day, qint64 nightEndMs)
         if (end > w.first)
             workouts.append({r.startMs, end});
     }
+    // and the time off the wrist (M4 WO-03): a reading from then is not the wearer's
+    workouts += offWristRanges(w.first, w.second);
     return restingHrOfMinutes(series, w.first, w.second, workouts);
 }
 
