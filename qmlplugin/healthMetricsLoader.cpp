@@ -96,7 +96,10 @@ QVariantMap HealthMetricsLoader::mainGoal()
     if (m_goalKeys.isEmpty()) {
         for (const QString &key : mainGoalKeys()) {
             MDConfItem *item = new MDConfItem(key, this);
-            connect(item, &MDConfItem::valueChanged, this, &HealthMetricsLoader::dataChanged);
+            // the steps goal's change is told by LoggerSettings.stepGoalChanged already (the readers bind to it): a
+            // second dataChanged for it would only make them read every day again
+            if (key != QLatin1String(goalKey(GoalType::Steps)))
+                connect(item, &MDConfItem::valueChanged, this, &HealthMetricsLoader::dataChanged);
             m_goalKeys << item;
         }
     }

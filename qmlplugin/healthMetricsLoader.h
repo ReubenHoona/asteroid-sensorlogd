@@ -39,7 +39,7 @@
  *                  wakeDate; measured; minutes; hasVariation; devC, loC, hiC (deg C); nights }
  *   skinTempWeek(date): the seven mornings up to it, the oldest first: { date, hasVariation, devC, loC, hiC, state }
  *   mainGoal():     the main goal (metrics/goals.h, R5 E-18): { type: steps, calories, distance, floors or azm;
- *                  target } (its keys watched: dataChanged)
+ *                  target } (its keys watched: dataChanged; the steps goal's is LoggerSettings.stepGoalChanged)
  *   cardioLoad(date): the day's cardio load and its target (healthMetrics.h, R5 E-09): { load (today up to now),
  *                  hasTarget, low, high, daysLeft (days with a load still needed for a target), state: below, in,
  *                  above or "" (no target), week: the seven days up to it, the oldest first, [{ date, load }] (-1:

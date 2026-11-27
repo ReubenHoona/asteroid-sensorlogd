@@ -350,6 +350,10 @@ private slots:
         MGConfItem::setTestValue("/org/asteroidos/health/goals/floors", 12);
         QCOMPARE(dataSpy.count(), 2);
         QCOMPARE(loader.mainGoal()["target"].toDouble(), 12.0);
+        // the steps goal is LoggerSettings' to tell: no second dataChanged from here
+        MGConfItem::setTestValue("/org/asteroidos/ux/steps-goal", 9000);
+        QCOMPARE(dataSpy.count(), 2);
+        MGConfItem::setTestValue("/org/asteroidos/ux/steps-goal", QVariant());
         MGConfItem::setTestValue("/org/asteroidos/health/goals/main", QVariant());
         MGConfItem::setTestValue("/org/asteroidos/health/goals/floors", QVariant());
         QCOMPARE(loader.mainGoal()["type"].toString(), QString("steps"));
