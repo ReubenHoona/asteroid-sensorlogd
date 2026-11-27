@@ -738,7 +738,20 @@ bool HealthDb::storeNight(const SleepNight &night, const QString &algo, const QS
         else
             q.bindNull(10).bindNull(11);
         q.bind(12, s.avgHr).bind(13, algo).bind(14, importedFrom);
-        return q.ok() && q.run();
+        if (!q.ok() || !q.run())
+            return false;
+        // the stage timeline (version 2 of the estimate; a night of version 1 or of the old files has none)
+        const qint64 id = sqlite3_last_insert_rowid(m_db);
+        Stmt st(m_db, "INSERT INTO sleep_stage (session_id, start_ms, end_ms, stage) VALUES (?, ?, ?, ?)");
+        for (const SleepStageSpan &span : s.stages) {
+            if (span.endMs <= span.startMs || span.stage < StageAwake || span.stage > StageRem)
+                return false;
+            st.reset();
+            st.bind(1, id).bind(2, span.startMs).bind(3, span.endMs).bind(4, span.stage);
+            if (!st.ok() || !st.run())
+                return false;
+        }
+        return true;
     };
     ok = ok && insert(night.main, true);
     for (const SleepSession &nap : night.naps)
@@ -835,6 +848,11 @@ QVariantMap HealthDb::readCounts(const QString &path)
         {"nights", "SELECT COUNT(DISTINCT wake_date) FROM sleep_session WHERE deleted = 0 AND main = 1"},
         {"sleepSessions", "SELECT COUNT(*) FROM sleep_session WHERE deleted = 0"},
         {"sleepImported", "SELECT COUNT(*) FROM sleep_session WHERE imported_from IS NOT NULL"},
+        {"naps", "SELECT COUNT(*) FROM sleep_session WHERE deleted = 0 AND main = 0"},
+        {"nightsV2", "SELECT COUNT(DISTINCT wake_date) FROM sleep_session WHERE deleted = 0 AND main = 1 "
+                     "AND algo = 'eos-motion-hr-2'"},
+        {"sleepStages", "SELECT COUNT(*) FROM sleep_stage JOIN sleep_session "
+                        "ON sleep_session.id = sleep_stage.session_id WHERE sleep_session.deleted = 0"},
         {"days", "SELECT COUNT(*) FROM daily"},
         {"daysClosed", "SELECT COUNT(*) FROM daily WHERE closed_ms IS NOT NULL"},
         {"daysResting", "SELECT COUNT(*) FROM daily WHERE resting_hr IS NOT NULL"},
@@ -948,7 +966,9 @@ bool HealthDb::readNight(const QString &path, const QDate &wakeDate, SleepNight 
 {
     ReadConn c(path);
     Stmt q(c.db(), "SELECT main, start_ms, end_ms, asleep_min, awake_min, rem_min, light_min, deep_min, avg_hr, score, "
-                   "goal_min FROM sleep_session WHERE wake_date = ? AND deleted = 0 ORDER BY main DESC, start_ms");
+                   "goal_min, id, algo FROM sleep_session WHERE wake_date = ? AND deleted = 0 "
+                   "ORDER BY main DESC, start_ms");
+    Stmt st(c.db(), "SELECT start_ms, end_ms, stage FROM sleep_stage WHERE session_id = ? ORDER BY start_ms");
     q.bind(1, wakeDate.toString(Qt::ISODate));
     SleepNight n;
     n.wakeDate = wakeDate;
@@ -962,11 +982,23 @@ bool HealthDb::readNight(const QString &path, const QDate &wakeDate, SleepNight 
         s.lightMin = q.i(6);
         s.deepMin = q.i(7);
         s.avgHr = q.d(8);
+        if (st.ok()) {
+            st.reset();
+            st.bind(1, q.i64(11));
+            while (st.row()) {
+                SleepStageSpan span;
+                span.startMs = st.i64(0);
+                span.endMs = st.i64(1);
+                span.stage = st.i(2);
+                s.stages.append(span);
+            }
+        }
         if (q.i(0) != 0 && !n.valid) {
             n.valid = true;
             n.main = s;
             n.score = q.i(9);
             n.goalMin = q.isNull(10) ? 480 : q.i(10);
+            n.algo = q.s(12);
         } else {
             n.naps.append(s);
             n.napMin += s.asleepMin;

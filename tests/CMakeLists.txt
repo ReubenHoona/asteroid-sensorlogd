@@ -78,8 +78,10 @@ endif()
 # are not built until they are brought up to it; tst_heartrate tests the batched heart rate and its database,
 # tst_store the health database and its one-time import, tst_api the daemon's D-Bus methods for it, tst_activity
 # the hub's motion and cadence streams (WO-05), tst_workouthub the workout latency asked of the hub (WO-08),
-# tst_offbody the hub's off-body state, the monitor's worn() and what is left out off the wrist (WO-03).
-foreach(name common heartrate barometer dataloaders health monitor healthloaders store api activity workouthub offbody)
+# tst_offbody the hub's off-body state, the monitor's worn() and what is left out off the wrist (WO-03), tst_sleep
+# the sleep estimate of version 2 on invented nights, its timeline in health.db and the day's naps (WO-06).
+foreach(name common heartrate barometer dataloaders health monitor healthloaders store api activity workouthub offbody
+        sleep)
     add_executable(tst_${name} tst_${name}.cpp testenv.h peek.h)
     target_link_libraries(tst_${name} PRIVATE sensorlogd-undertest)
     if(SENSORLOGD_JUNIT_DIR)

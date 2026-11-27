@@ -35,7 +35,9 @@ class HeartrateSensorPlugin;
 /*
  * What the Health app does on its own account while the watch is worn: high and low heart rate alerts
  * (health-fitness-16), reminders to move and their celebrations (-15), the steps goal reached (-10, -14),
- * auto-detected exercise prompts (-28), the nightly sleep estimate (-17), and the rows of health.db it writes: the
+ * auto-detected exercise prompts (-28), the nightly sleep estimate (-17; version 2 with the hub's motion and
+ * off-body streams and a stage timeline, M4 WO-06, and the day's naps once they are over), and the rows of health.db
+ * it writes: the
  * night, the day's resting heart rate (restingHr.h: in the morning with the night, else at the day's close), and
  * the day closed on the first delivery after its midnight (stock WHS PRE_MIDNIGHT_FLUSH).
  *

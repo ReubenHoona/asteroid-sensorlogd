@@ -20,8 +20,11 @@
  * one-time import took it in), or one estimated now from the logs if the daemon has not yet.
  *
  *   { valid, stored, wakeDate, main: { startMs, endMs, durationMin, asleepMin, awakeMin, remMin, lightMin,
- *     deepMin, awakePct, remPct, lightPct, deepPct, avgHr }, naps: [ same ], napMin, score, scoreLabel,
- *     goalMin, goalMet }
+ *     deepMin, awakePct, remPct, lightPct, deepPct, avgHr, stages: [ { startMs, endMs, stage, name } ] },
+ *     naps: [ same ], napMin, score, scoreLabel, goalMin, goalMet }
+ *
+ * stages: the timeline of the session (M4 WO-06), stage 0 Awake, 1 Light, 2 Deep, 3 REM (name: stock's word);
+ * empty for a night stored by an older sensorlogd.
  *
  * valid false: "No recent data. Wear your watch to sleep."
  * dataChanged: the daemon wrote to health.db (its D-Bus signal HealthChanged).

@@ -7,6 +7,8 @@
  * You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
+
 #include <QDateTime>
 #include <QDebug>
 #include <QJsonDocument>
@@ -363,8 +365,11 @@ void HealthMonitor::checkGoal()
 }
 
 // Last night's sleep, once it is over: when data is looked at after the watch has been still for
-// SLEEP_QUIET_MS past the night's last asleep minute; stored in health.db (sleep_session). Tried at most every
-// SLEEP_RETRY_MS, on data deliveries only.
+// SLEEP_QUIET_MS past the night's last asleep minute; stored in health.db (sleep_session and its stage timeline in
+// sleep_stage, the estimate of version 2: SLEEP_ALGO_V2, sleepEstimator.h). Later that day, a nap that is over (as
+// long quiet) is stored with it: the morning's main sleep as it was stored, the day's naps (stock lists them:
+// "Naps", "Nap from %1$s to %2$s"); nothing is written when no nap is new. Tried at most every SLEEP_RETRY_MS
+// (05:00-20:00), on data deliveries only.
 void HealthMonitor::checkSleep()
 {
     const qint64 t = now();
@@ -372,16 +377,50 @@ void HealthMonitor::checkSleep()
     if (local.time().hour() < 5 || local.time().hour() >= 20)
         return;
     const QString today = local.date().toString(Qt::ISODate);
-    if (m_settings->value("HealthPrivate/sleepStored", QString()).toString() == today)
-        return;
     if (m_sleepAttemptMs != 0 && t >= m_sleepAttemptMs && t - m_sleepAttemptMs < SLEEP_RETRY_MS)
         return;
     m_sleepAttemptMs = t;
+    const bool stored = m_settings->value("HealthPrivate/sleepStored", QString()).toString() == today;
     const int rhr = effectiveRestingHr(m_profile, m_restingEstimate);
-    const SleepNight night = estimateNight(local.date(), m_profile, rhr);
+    SleepNight night = estimateNight(local.date(), m_profile, rhr);
     if (!night.valid || t - night.main.endMs < SLEEP_QUIET_MS)
         return;
-    if (m_store && m_store->storeNight(night, QString::fromLatin1(HealthImport::SLEEP_ALGO))) {
+    // the naps that are over
+    QList<SleepSession> naps;
+    for (const SleepSession &nap : night.naps)
+        if (t - nap.endMs >= SLEEP_QUIET_MS)
+            naps.append(nap);
+    auto setNaps = [](SleepNight &n, QList<SleepSession> list) {
+        std::sort(list.begin(), list.end(),
+                  [](const SleepSession &a, const SleepSession &b) { return a.startMs < b.startMs; });
+        n.naps = list;
+        n.napMin = 0;
+        for (const SleepSession &s : list)
+            n.napMin += s.asleepMin;
+    };
+    if (stored) {
+        SleepNight inDb;
+        if (!m_store || !HealthDb::readNight(m_store->path(), local.date(), &inDb))
+            return;
+        QList<SleepSession> all = inDb.naps;
+        bool added = false;
+        for (const SleepSession &nap : naps) {
+            bool known = false;
+            for (const SleepSession &old : inDb.naps)
+                known = known || (nap.startMs < old.endMs && old.startMs < nap.endMs);
+            if (!known) {
+                all.append(nap);
+                added = true;
+            }
+        }
+        if (!added)
+            return;
+        setNaps(inDb, all);
+        m_store->storeNight(inDb, inDb.algo.isEmpty() ? QString::fromLatin1(SLEEP_ALGO_V2) : inDb.algo);
+        return;
+    }
+    setNaps(night, naps);
+    if (m_store && m_store->storeNight(night, QString::fromLatin1(SLEEP_ALGO_V2))) {
         m_settings->setValue("HealthPrivate/sleepStored", today);
         // the day's resting heart rate: once, over the 24 hours up to the night's end
         storeRestingHr(local.date(), night.main.endMs);

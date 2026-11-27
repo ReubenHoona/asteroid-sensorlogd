@@ -177,8 +177,9 @@ public:
     bool importWorkout(const WorkoutRecord &w);
 
     // ---- sleep ----
-    // The night that ended on night.wakeDate: its sessions (main and naps) replace the ones stored for that
-    // morning (tombstoned). onlyIfNone: nothing is written if the morning has any session, also a deleted one.
+    // The night that ended on night.wakeDate: its sessions (main and naps) with their stage timelines replace the
+    // ones stored for that morning (tombstoned). onlyIfNone: nothing is written if the morning has any session, also
+    // a deleted one.
     bool storeNight(const SleepNight &night, const QString &algo, const QString &importedFrom = QString(),
                     bool onlyIfNone = false);
 
@@ -192,7 +193,8 @@ public:
     static qint64 readSeq(const QString &path);
     static QVariant readMeta(const QString &path, const QString &key);
     // How many rows of each kind, no values (for checks on the watch): schema, seq, workouts, workoutsDeleted,
-    // workoutsImported, workoutsOpen, trackPoints, laps, pauses, nights, sleepSessions, sleepImported, days, daysClosed,
+    // workoutsImported, workoutsOpen, trackPoints, laps, pauses, nights, sleepSessions, sleepImported, naps, nightsV2
+    // (the estimate of version 2), sleepStages (the stage spans of the sessions in force), days, daysClosed,
     // daysResting, and import.sleep, import.exercise, import.resting, import.daily (1: done). {} without a database.
     static QVariantMap readCounts(const QString &path);
     // the workouts that began in [fromMs, toMs), newest first (deleted ones left out)
@@ -204,7 +206,8 @@ public:
     // none was saved; paused: a pause of it is open); false if there is none
     static bool readOpenWorkout(const QString &path, qint64 beforeMs, WorkoutRecord *workout, qint64 *savedMs = nullptr,
                                 QString *state = nullptr, bool *paused = nullptr);
-    // the night that ended on wakeDate, as the sleep estimator made it; false if none is stored
+    // the night that ended on wakeDate, as the sleep estimator made it (with the stage timelines and the main
+    // session's algo); false if none is stored
     static bool readNight(const QString &path, const QDate &wakeDate, SleepNight *night);
     static bool readDaily(const QString &path, const QDate &date, DailyRecord *record);
     static QList<DailyRecord> readDailyRange(const QString &path, const QDate &from, const QDate &to);

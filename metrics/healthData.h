@@ -67,13 +67,19 @@ DaySummary summarizeDay(const QDate &day, const HealthProfile &profile, int rest
 // the day has a step day file or a heart rate reading
 bool hasDataOn(const QDate &day);
 
+// the records of a day stream (stepCadence/) in [fromMs, toMs), in time order (seconds since the epoch, value)
+QList<QPointF> loadRecords(const QString &prefix, qint64 fromMs, qint64 toMs);
+// What the night that ended on wakeDate has besides steps and heart rate (sleepEstimator.h, M4 WO-06): the motion,
+// step cadence and off-body records over the estimate's window (18:00 the evening before to 18:00)
+SleepContext loadSleepContext(const QDate &wakeDate);
+
 // The night that ended on wakeDate as the daemon stored it: in health.db, else (until the one-time import has
 // taken the files in) in sleep/<wakeDate>.json, where a sensorlogd from before health.db stored it; false if none
 bool loadStoredSleep(const QDate &wakeDate, SleepNight *night);
 // The night that ended on wakeDate: the stored one (loadStoredSleep) if there is one, else estimated now from
 // the logs (stored: false then)
 SleepNight loadSleep(const QDate &wakeDate, const HealthProfile &profile, int restingHr, bool *stored = nullptr);
-// the night's result, estimated from the logs
+// the night's result, estimated from the logs (with the night's context: version 2 of the estimate)
 SleepNight estimateNight(const QDate &wakeDate, const HealthProfile &profile, int restingHr);
 // the file of a night of a sensorlogd from before health.db (read and imported, no longer written)
 QString sleepFilePath(const QDate &wakeDate);

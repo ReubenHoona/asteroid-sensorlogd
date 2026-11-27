@@ -152,6 +152,30 @@ QString sleepFilePath(const QDate &wakeDate)
     return sensorDirPath("sleep") + wakeDate.toString("yyyy-MM-dd") + ".json";
 }
 
+QList<QPointF> loadRecords(const QString &prefix, qint64 fromMs, qint64 toMs)
+{
+    QList<QPointF> out;
+    const double fromS = fromMs / 1000.0, toS = toMs / 1000.0;
+    const QDate last = QDateTime::fromMSecsSinceEpoch(qMax(fromMs, toMs - 1)).date();
+    for (QDate d = QDateTime::fromMSecsSinceEpoch(fromMs).date(); d <= last; d = d.addDays(1))
+        for (const QPointF &p : readDayRecords(fileNameForDate(d, prefix)))
+            if (p.x() >= fromS && p.x() < toS)
+                out.append(p);
+    std::stable_sort(out.begin(), out.end(), [](const QPointF &a, const QPointF &b) { return a.x() < b.x(); });
+    return out;
+}
+
+SleepContext loadSleepContext(const QDate &wakeDate)
+{
+    const qint64 from = QDateTime(wakeDate.addDays(-1), QTime(18, 0)).toMSecsSinceEpoch();
+    const qint64 to = QDateTime(wakeDate, QTime(18, 0)).toMSecsSinceEpoch();
+    SleepContext c;
+    c.motion = loadStateRecords(QStringLiteral("motion"), from, to, 1);
+    c.cadence = loadRecords(QStringLiteral("stepCadence"), from, to);
+    c.offBody = loadStateRecords(QStringLiteral("offBody"), from, to);
+    return c;
+}
+
 SleepNight estimateNight(const QDate &wakeDate, const HealthProfile &profile, int restingHr)
 {
     MinuteSeries series;
@@ -161,7 +185,7 @@ SleepNight estimateNight(const QDate &wakeDate, const HealthProfile &profile, in
     const qint64 to = QDateTime(wakeDate, QTime(18, 0)).toMSecsSinceEpoch();
     // no heart rate off the wrist (M4 WO-03): a reading from then is not the wearer's
     loadHeartRate(series, from, to, offWristRanges(from, to));
-    return estimateSleep(series, wakeDate, profile, restingHr);
+    return estimateSleep(series, wakeDate, profile, restingHr, 480, loadSleepContext(wakeDate));
 }
 
 bool loadStoredSleep(const QDate &wakeDate, SleepNight *night)
