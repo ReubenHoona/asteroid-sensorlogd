@@ -19,28 +19,28 @@ namespace Health {
 
 /*
  * Auto-detected exercise prompts (health-fitness-28). Stock asks "Start tracking?" when it detects an activity
- * (auto-start) and "Finished working out?" when the activity stops during a workout (auto-stop)
- * (ExerciseAutoRecognitionService.java:179-193); the settings are "Auto-Start" and "Auto-Stop"
- * (strings 0x7f14006a-0x7f14006e). Stock recognises more types; from the step cadence of the sensor hub's
+ * outside a workout (auto-start, ExerciseAutoRecognitionService.java:179-193); the setting is "Start workout
+ * reminders" (autoExercise/start). Stock recognises more types; from the step cadence of the sensor hub's
  * batches there are two: walking and running.
  *
  * Start: START_MINUTES in a row with a cadence of WALK_CADENCE steps a minute or more and a mean of
  * WALK_MEAN or more (RUN_MEAN or more: running). One offer per activity: another needs a quiet spell
- * (QUIET_MINUTES with fewer than QUIET_CADENCE steps) in between.
- * Stop: while a workout is going (the Exercise app says so), STOP_MINUTES in a row of quiet; one offer per workout
- * and quiet spell.
+ * (QUIET_MINUTES with fewer than QUIET_CADENCE steps) in between. While a workout is going (the Exercise app's,
+ * in health.db) there is no start offer: the workout is the activity.
+ * No stop offer here (M4 WO-07): stock's "Finished working out?" (auto-stop) is an event of the workout itself,
+ * asked for by the exercise app in its exercise config when "End workout reminders" is on and the type has it
+ * (wxl.java:1601-1602, EXERCISE_EVENT_TYPE_AUTO_STOP) and turned by it into the question (ptx.java:580,
+ * nxz.java:372-415, AutoStopNotificationActivity). The Exercise app asks it, after 10 still minutes judged from
+ * the step cadence and the GPS speed of the workout's type (a ride has no steps); it reads autoExercise/stop.
  * Like the other detectors it looks at completed minutes when data has been delivered, never on a timer.
  */
 struct AutoExerciseSettings {
     bool start = true;
-    bool stop = true;
 };
 
 struct ExerciseOffer {
-    enum Kind { Start, Stop };
-    Kind kind;
-    QString activity; // "walking" or "running" (Start); empty for Stop
-    qint64 sinceMs;   // Start: when the activity began; Stop: when it went quiet
+    QString activity; // "walking" or "running"
+    qint64 sinceMs;   // when the activity began
 };
 
 class AutoExercise
@@ -52,7 +52,6 @@ public:
     static const int RUN_MEAN = 140;
     static const int QUIET_CADENCE = 20;
     static const int QUIET_MINUTES = 5;
-    static const int STOP_MINUTES = 5;
 
     QList<ExerciseOffer> feed(const MinuteSeries &series, qint64 nowMs, const AutoExerciseSettings &settings,
                               bool workoutActive);
@@ -66,9 +65,7 @@ private:
     double m_activeSum = 0;
     qint64 m_activeStart = 0;
     int m_quiet = 0;        // minutes in a row of quiet
-    qint64 m_quietStart = 0;
     bool m_armed = true;    // a start offer may be made (a quiet spell came since the last)
-    bool m_stopOffered = false;
 };
 
 } // namespace Health

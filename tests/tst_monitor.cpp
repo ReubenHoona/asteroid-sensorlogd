@@ -483,7 +483,7 @@ private slots:
     }
 
     // ---- auto-detected exercise ----
-    void aWalkOffersAndTheEndOfAWorkoutAsks()
+    void aWalkOffersAndAWorkoutMakesNoOffer()
     {
         HealthMonitor *m = make(ms(THU, 10, 0));
         QSignalSpy offered(m, &HealthMonitor::exerciseOffered);
@@ -502,18 +502,20 @@ private slots:
         const QJsonObject j = QJsonDocument::fromJson(poster.posted[0].hints.value("x-asteroid-exercise").toString().toUtf8()).object();
         QCOMPARE(j["action"].toString(), QString("start"));
 
-        // the Exercise app starts the workout; the walk goes on, then stops
+        // the Exercise app starts the workout; the walk goes on, then stops: 'Finished working out?' is the app's
+        // (M4 WO-07), nothing here after 5, 10 or 20 quiet minutes, with 'End workout reminders' on
         m->setWorkoutActive(true);
         steps(THU, 10, 10, 10, 100);
         clock = ms(THU, 10, 20);
         m->evaluate();
         QCOMPARE(poster.posted.size(), 1);
-        clock = ms(THU, 10, 26);
-        m->evaluate();
-        QCOMPARE(poster.posted.size(), 2);
-        QCOMPARE(poster.posted[1].summary, QString("Finished working out?"));
-        QCOMPARE(offered.count(), 2);
-        QCOMPARE(offered[1][0].toString(), QString("stop"));
+        for (int quiet : {5, 10, 20}) {
+            clock = ms(THU, 10, 20 + quiet, 1);
+            m->evaluate();
+        }
+        QCOMPARE(poster.posted.size(), 1);
+        QCOMPARE(offered.count(), 1);
+        QVERIFY(settings->value("autoExercise/stop", true).toBool());
     }
 
     void exercisePromptsFollowTheirSettings()

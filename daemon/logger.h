@@ -111,7 +111,8 @@ public slots:
 signals:
     // the steps goal was reached for the first time today (metric "steps")
     void goalReached(const QString &metric, int value, int goal);
-    // auto-detected exercise: action "start" (activity "walking" / "running") or "stop"
+    // auto-detected exercise: action "start", activity "walking" / "running" (no "stop": the Exercise app asks
+    // "Finished working out?" itself, metrics/autoExercise.h)
     // D-Bus signal ExerciseOffered (s action, s activity, x sinceMs): asteroid-exercise's rcExerciseOffered
     void ExerciseOffered(const QString &action, const QString &activity, qlonglong sinceMs);
     // health.db changed; seq: its change counter after the write

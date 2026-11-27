@@ -42,32 +42,22 @@ QList<ExerciseOffer> AutoExercise::feed(const MinuteSeries &series, qint64 nowMs
         } else {
             m_active = 0;
         }
-        if (quiet) {
-            if (m_quiet == 0)
-                m_quietStart = minute;
+        if (quiet)
             m_quiet++;
-        } else {
+        else
             m_quiet = 0;
-            m_stopOffered = false;
-        }
 
         if (m_quiet >= QUIET_MINUTES)
             m_armed = true;
 
         if (!workoutActive) {
-            m_stopOffered = false;
             if (settings.start && m_armed && m_active >= START_MINUTES && m_activeSum / m_active >= WALK_MEAN) {
                 m_armed = false;
-                offers.append({ExerciseOffer::Start,
-                               m_activeSum / m_active >= RUN_MEAN ? QStringLiteral("running") : QStringLiteral("walking"),
+                offers.append({m_activeSum / m_active >= RUN_MEAN ? QStringLiteral("running") : QStringLiteral("walking"),
                                MinuteSeries::msOf(m_activeStart)});
             }
         } else {
-            m_armed = false; // the workout in progress is the activity
-            if (settings.stop && !m_stopOffered && m_quiet >= STOP_MINUTES) {
-                m_stopOffered = true;
-                offers.append({ExerciseOffer::Stop, QString(), MinuteSeries::msOf(m_quietStart)});
-            }
+            m_armed = false; // the workout in progress is the activity ("Finished working out?" is the app's)
         }
         m_seen = minute;
     }

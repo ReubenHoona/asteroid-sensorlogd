@@ -51,7 +51,8 @@ class LoggerSettings : public QObject {
     Q_PROPERTY(bool hrAlertLowEnabled READ getHrAlertLowEnabled WRITE setHrAlertLowEnabled NOTIFY healthChanged)
     Q_PROPERTY(int hrAlertLowBpm READ getHrAlertLowBpm WRITE setHrAlertLowBpm NOTIFY healthChanged)
 
-    // Auto-Start / Auto-Stop of the exercise prompts (stock: "Start workout reminders", "End workout reminders")
+    // Auto-Start / Auto-Stop of the exercise prompts (stock: "Start workout reminders", "End workout reminders");
+    // the start prompt is this daemon's, the end one the Exercise app's (it reads autoExercise/stop)
     Q_PROPERTY(bool autoStartEnabled READ getAutoStartEnabled WRITE setAutoStartEnabled NOTIFY healthChanged)
     Q_PROPERTY(bool autoStopEnabled READ getAutoStopEnabled WRITE setAutoStopEnabled NOTIFY healthChanged)
 
@@ -98,7 +99,7 @@ public slots:
     bool getAutoStopEnabled();
     void setAutoStopEnabled(bool value);
 
-    // the Exercise app has a workout going (for the "Finished working out?" prompt)
+    // the Exercise app has a workout going (no "Start tracking?" offer during it)
     Q_INVOKABLE void setWorkoutActive(bool active);
 
 signals:

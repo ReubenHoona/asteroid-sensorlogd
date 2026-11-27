@@ -54,7 +54,8 @@ class HeartrateSensorPlugin;
  *   reminders/enabled (false), reminders/startHour (9), reminders/endHour (18), reminders/days (127)
  *   hrAlerts/highEnabled (true), hrAlerts/highBpm (0: none set, stock's default 120),
  *   hrAlerts/lowEnabled (true), hrAlerts/lowBpm (0: none set, stock's default 50)
- *   autoExercise/start (true), autoExercise/stop (true)
+ *   autoExercise/start (true); autoExercise/stop (true) is "End workout reminders", which the Exercise app reads
+ *   for its own "Finished working out?" (WorkoutStore::endReminders; no stop offer here, autoExercise.h)
  * The steps goal is the dconf key /org/asteroidos/ux/steps-goal (10000), the profile the keys of healthProfile.h.
  *
  * Worn (no reminder to move off the wrist): the sensor hub's off-body sensor when it knows (setOffBody, from the
@@ -89,7 +90,7 @@ public:
     void reloadSettings();
     // the display came on: what the hub batched is delivered now; look at it once it is in
     void displayOn();
-    // the Exercise app has a workout going (for the "Finished working out?" prompt)
+    // the Exercise app has a workout going (no "Start tracking?" offer during it)
     void setWorkoutActive(bool active);
     // the off-body sensor's state (OffBodyPlugin): -1 unknown, 0 on the wrist, 1 off it
     void setOffBody(int state) { m_offBody = state; }
@@ -106,7 +107,7 @@ public:
 signals:
     // a daily goal was reached for the first time today (metric "steps"): the launcher's celebration
     void goalReached(const QString &metric, int value, int goal);
-    // auto-detected exercise: action "start" (activity "walking" / "running") or "stop"
+    // auto-detected exercise: action "start", activity "walking" / "running" (the stop is the Exercise app's)
     void exerciseOffered(const QString &action, const QString &activity, qlonglong sinceMs);
 
 private slots:

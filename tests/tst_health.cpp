@@ -822,7 +822,6 @@ private slots:
         QVERIFY(a.feed(s, ms(THU, 10, 9, 30), cfg, false).isEmpty()); // 9 minutes
         const QList<ExerciseOffer> o = a.feed(s, ms(THU, 10, 10, 5), cfg, false);
         QCOMPARE(o.size(), 1);
-        QVERIFY(o[0].kind == ExerciseOffer::Start);
         QCOMPARE(o[0].activity, QString("walking"));
         QCOMPARE(o[0].sinceMs, ms(THU, 10, 0));
         // the walk goes on: one offer
@@ -885,43 +884,40 @@ private slots:
         QVERIFY(a.feed(s, ms(THU, 10, 12), cfg, false).isEmpty());
     }
 
-    void finishedWorkingOutAfterAStopInActivity()
+    // M4 WO-07: 'Finished working out?' is the Exercise app's (10 still minutes by cadence and GPS speed), so a
+    // workout's quiet minutes make no offer here: not after 5 (the old offer), not after 10 or 30, and a ride
+    // (no steps at all) none either
+    void aWorkoutsQuietMinutesMakeNoOffer()
     {
         MinuteSeries s;
         fill(s, THU, 10, 0, 20, 100, 0);
-        fill(s, THU, 10, 20, 5, 0, 0);
+        fill(s, THU, 10, 20, 30, 0, 0);
         AutoExercise a;
         AutoExerciseSettings cfg;
-        // a workout going: no start prompt; the stop after 5 quiet minutes
-        QVERIFY(a.feed(s, ms(THU, 10, 24), cfg, true).isEmpty());
-        const QList<ExerciseOffer> o = a.feed(s, ms(THU, 10, 25, 1), cfg, true);
-        QCOMPARE(o.size(), 1);
-        QVERIFY(o[0].kind == ExerciseOffer::Stop);
-        QCOMPARE(o[0].sinceMs, ms(THU, 10, 20));
-        QVERIFY(a.feed(s, ms(THU, 10, 40), cfg, true).isEmpty()); // once per quiet spell
-        // moving again and stopping again: another prompt
-        fill(s, THU, 10, 40, 5, 100, 0);
-        QVERIFY(a.feed(s, ms(THU, 10, 45), cfg, true).isEmpty());
-        QCOMPARE(a.feed(s, ms(THU, 10, 50, 1), cfg, true).size(), 1);
-        // auto-stop off: none
-        MinuteSeries t;
-        fill(t, THU, 11, 0, 20, 100, 0);
-        fill(t, THU, 11, 20, 8, 0, 0);
+        QVERIFY(a.feed(s, ms(THU, 10, 25, 1), cfg, true).isEmpty());
+        QVERIFY(a.feed(s, ms(THU, 10, 30, 1), cfg, true).isEmpty());
+        QVERIFY(a.feed(s, ms(THU, 10, 50, 1), cfg, true).isEmpty());
+        MinuteSeries ride;
+        fill(ride, THU, 12, 0, 40, 0, 0);
         AutoExercise b;
-        AutoExerciseSettings noStop;
-        noStop.stop = false;
-        QVERIFY(b.feed(t, ms(THU, 11, 30), noStop, true).isEmpty());
+        QVERIFY(b.feed(ride, ms(THU, 12, 5, 1), cfg, true).isEmpty());
+        QVERIFY(b.feed(ride, ms(THU, 12, 40, 1), cfg, true).isEmpty());
     }
 
-    void noStopPromptWithoutAWorkout()
+    // the workout holds the start offer back; after it a walk is offered again once a quiet spell came
+    void aWorkoutHoldsTheStartOfferBack()
     {
         MinuteSeries s;
-        fill(s, THU, 10, 0, 20, 100, 0);
-        fill(s, THU, 10, 20, 8, 0, 0);
+        fill(s, THU, 10, 0, 30, 100, 0);
         AutoExercise a;
-        const QList<ExerciseOffer> o = a.feed(s, ms(THU, 10, 29), AutoExerciseSettings(), false);
-        for (const ExerciseOffer &x : o)
-            QVERIFY(x.kind != ExerciseOffer::Stop);
+        AutoExerciseSettings cfg;
+        QVERIFY(a.feed(s, ms(THU, 10, 30, 1), cfg, true).isEmpty());
+        fill(s, THU, 10, 30, 6, 0, 0);
+        fill(s, THU, 10, 36, 10, 100, 0);
+        const QList<ExerciseOffer> o = a.feed(s, ms(THU, 10, 46, 1), cfg, false);
+        QCOMPARE(o.size(), 1);
+        QCOMPARE(o[0].activity, QString("walking"));
+        QCOMPARE(o[0].sinceMs, ms(THU, 10, 36));
     }
 };
 

@@ -71,7 +71,6 @@ void HealthMonitor::reloadSettings()
     s.hrAlerts.lowEnabled = m_settings->value("hrAlerts/lowEnabled", true).toBool();
     s.hrAlerts.low = m_settings->value("hrAlerts/lowBpm", 0).toInt();
     s.exercise.start = m_settings->value("autoExercise/start", true).toBool();
-    s.exercise.stop = m_settings->value("autoExercise/stop", true).toBool();
     m_config = s;
     m_profileAt = 0; // the profile too may have changed
     armReminderTimer();
@@ -333,21 +332,20 @@ void HealthMonitor::postMove(const MoveEvent &event)
     post(n);
 }
 
-// stock/STRINGS.tsv 0x7f140059 / 0x7f140057 (detected, Start tracking?) and 0x7f1409c0 (Finished working out?);
-// the brand in the first one is ours
+// stock/STRINGS.tsv 0x7f140059 / 0x7f140057 (detected, Start tracking?); the brand in the first one is ours.
+// ('Finished working out?', 0x7f1409c0, is the Exercise app's own: autoExercise.h)
 void HealthMonitor::postExercise(const ExerciseOffer &offer)
 {
-    const bool start = offer.kind == ExerciseOffer::Start;
     HealthNotification n;
-    n.summary = start ? QStringLiteral("Activity detected") : QStringLiteral("Finished working out?");
-    n.body = start ? QStringLiteral("Start tracking?") : QString();
+    n.summary = QStringLiteral("Activity detected");
+    n.body = QStringLiteral("Start tracking?");
     n.icon = QStringLiteral("ios-walk");
     n.hints.insert("x-asteroid-category", QStringLiteral("exercise-detect"));
     n.hints.insert("transient", true);
-    n.hints.insert("x-asteroid-exercise", json({{"action", start ? "start" : "stop"}, {"activity", offer.activity},
+    n.hints.insert("x-asteroid-exercise", json({{"action", "start"}, {"activity", offer.activity},
                                                 {"since", (double)offer.sinceMs}}));
     post(n);
-    emit exerciseOffered(start ? QStringLiteral("start") : QStringLiteral("stop"), offer.activity, offer.sinceMs);
+    emit exerciseOffered(QStringLiteral("start"), offer.activity, offer.sinceMs);
 }
 
 void HealthMonitor::checkGoal()
