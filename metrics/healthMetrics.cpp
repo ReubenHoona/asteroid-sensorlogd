@@ -239,6 +239,50 @@ int floorsClimbed(const QList<QPointF> &pressure, const MinuteSeries &steps)
     return (int)std::floor(gain / FLOOR_M);
 }
 
+double trimpForMinute(double bpm, int maxHr, int restingHr, HealthProfile::Sex sex)
+{
+    if (!(bpm > 0) || maxHr <= restingHr)
+        return 0;
+    const double hrr = qMin(1.2, (bpm - restingHr) / (double)(maxHr - restingHr));
+    if (hrr < CARDIO_FROM_HRR)
+        return 0;
+    const double male = 0.64 * std::exp(1.92 * hrr);
+    const double female = 0.86 * std::exp(1.67 * hrr);
+    const double k = sex == HealthProfile::Male ? male : sex == HealthProfile::Female ? female : (male + female) / 2;
+    return hrr * k;
+}
+
+double cardioLoad(const MinuteSeries &series, qint64 fromMinute, qint64 toMinute, const HealthProfile &profile,
+                  int restingHr)
+{
+    double load = 0;
+    for (auto it = series.data().lowerBound(fromMinute); it != series.data().constEnd() && it.key() < toMinute; ++it)
+        load += trimpForMinute(it->hr, profile.maxHr(), restingHr, profile.sex);
+    return load;
+}
+
+CardioTarget cardioTarget(const QList<double> &dailyLoads)
+{
+    CardioTarget t;
+    double sum = 0;
+    int days = 0;
+    for (double l : dailyLoads) {
+        if (l < 0)
+            continue;
+        sum += l;
+        days++;
+    }
+    if (days < CARDIO_CALIBRATION_DAYS) {
+        t.daysLeft = CARDIO_CALIBRATION_DAYS - days;
+        return t;
+    }
+    const double mean = sum / days;
+    t.known = true;
+    t.low = (int)std::lround(CARDIO_TARGET_LOW * mean);
+    t.high = qMax(t.low + 1, (int)std::lround(CARDIO_TARGET_HIGH * mean));
+    return t;
+}
+
 InactiveSpan longestInactive(const MinuteSeries &series, qint64 fromMs, qint64 toMs,
                              const QList<QPair<qint64, qint64>> &asleep)
 {

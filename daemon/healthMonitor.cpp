@@ -770,6 +770,7 @@ bool HealthMonitor::dayTotals(const QDate &day, DailyTotals *totals)
     totals->floors = d.floors;
     totals->azm = d.zones.azm;
     totals->hoursMet = d.hourly.hoursMet;
+    totals->cardioLoad = d.cardioLoad; // R5 E-09
     return true;
 }
 
@@ -796,4 +797,23 @@ void HealthMonitor::closeDays()
         m_store->setDailyTotals(d, totals, now());
     }
     m_closedThrough = yesterday;
+    backfillCardioLoad(yesterday);
+}
+
+// The cardio load of the days closed before it was computed (R5 E-09): once, the 28 days a target looks at, so the
+// target is there at once and not after a week of new days
+void HealthMonitor::backfillCardioLoad(const QDate &yesterday)
+{
+    if (!m_store || m_store->meta(QStringLiteral("cardio_load.backfill")).toLongLong() == 1)
+        return;
+    const QList<DailyRecord> rows =
+            HealthDb::readDailyRange(m_store->path(), yesterday.addDays(1 - CARDIO_HISTORY_DAYS), yesterday);
+    for (const DailyRecord &r : rows) {
+        if (!r.closed || r.totals.cardioLoad >= 0)
+            continue;
+        DailyTotals totals;
+        if (dayTotals(r.date, &totals))
+            m_store->setDailyTotals(r.date, totals, r.closedMs);
+    }
+    m_store->setMeta(QStringLiteral("cardio_load.backfill"), 1LL);
 }

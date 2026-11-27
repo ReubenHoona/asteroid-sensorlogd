@@ -1145,6 +1145,34 @@ private slots:
         QVERIFY(a->isStopped());
     }
 
+    // R5 E-09: the days closed before the cardio load get theirs once, the 28 days a target looks at
+    void theCardioLoadOfDaysClosedBeforeIsFilledInOnce()
+    {
+        HealthMonitor *m = make(ms(THU, 9, 0));
+        QTRY_VERIFY(m->importDone());
+        const QDate wed = THU.addDays(-1), old = THU.addDays(-40);
+        DailyTotals t;
+        QVERIFY(m->store()->setDailyTotals(wed, t, ms(THU, 0, 30)));
+        QVERIFY(m->store()->setDailyTotals(old, t, ms(old.addDays(1), 0, 30)));
+        testenv::writeDay("stepCounter", wed, QByteArray::number(ms(wed, 10, 0) / 1000) + ":900\n");
+        m->m_store->setMeta(QStringLiteral("cardio_load.backfill"), 0LL);
+        m->m_closedThrough = QDate();
+        m->evaluate();
+        DailyRecord r;
+        QVERIFY(HealthDb::readDaily(healthDbPath(), wed, &r));
+        QCOMPARE(r.totals.cardioLoad, 0.0);
+        QCOMPARE(r.closedMs, ms(THU, 0, 30)); // closed as it was
+        QVERIFY(HealthDb::readDaily(healthDbPath(), old, &r));
+        QCOMPARE(r.totals.cardioLoad, -1.0); // older than the 28 days
+        QCOMPARE(m->store()->meta(QStringLiteral("cardio_load.backfill")).toLongLong(), 1LL);
+        // once: a row without one later is left
+        QVERIFY(m->store()->setDailyTotals(wed, t, ms(THU, 0, 30)));
+        const qint64 seq = m->store()->seq();
+        m->m_closedThrough = QDate();
+        m->evaluate();
+        QCOMPARE(m->store()->seq(), seq);
+    }
+
     void aDayIsClosedOnTheFirstDeliveryAfterMidnight()
     {
         HealthMonitor *m = make(ms(THU, 22, 0));
@@ -1162,6 +1190,7 @@ private slots:
         QCOMPARE(r.totals.steps, 6100);
         QCOMPARE(r.closedMs, ms(THU.addDays(1), 0, 40));
         QCOMPARE(r.totals.distanceM, distanceM(6100, HealthProfile()));
+        QCOMPARE(r.totals.cardioLoad, 0.0); // R5 E-09: closed with its cardio load (no heart rate: 0)
         // closed once: the next deliveries leave it
         const qint64 seq = m->store()->seq();
         clock = ms(THU.addDays(1), 1, 30);

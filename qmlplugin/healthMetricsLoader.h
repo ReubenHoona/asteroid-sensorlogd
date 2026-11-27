@@ -40,6 +40,10 @@
  *   skinTempWeek(date): the seven mornings up to it, the oldest first: { date, hasVariation, devC, loC, hiC, state }
  *   mainGoal():     the main goal (metrics/goals.h, R5 E-18): { type: steps, calories, distance, floors or azm;
  *                  target } (its keys watched: dataChanged)
+ *   cardioLoad(date): the day's cardio load and its target (healthMetrics.h, R5 E-09): { load (today up to now),
+ *                  hasTarget, low, high, daysLeft (days with a load still needed for a target), state: below, in,
+ *                  above or "" (no target), week: the seven days up to it, the oldest first, [{ date, load }] (-1:
+ *                  none) }
  *
  * dataChanged: a step day file changed, or the daemon wrote to health.db (its D-Bus signal HealthChanged).
  */
@@ -93,6 +97,8 @@ public:
 
     // the main goal: { type, target } (metrics/goals.h)
     Q_INVOKABLE QVariantMap mainGoal();
+    // the day's cardio load and its target (R5 E-09)
+    Q_INVOKABLE QVariantMap cardioLoad(QDate date);
     // the day's row in health.db ({} if none)
     Q_INVOKABLE QVariantMap daily(QDate date);
     // the skin temperature variation of a morning (M4 WO-13) and of the seven mornings up to it

@@ -121,6 +121,7 @@ struct DailyTotals {
     int floors = 0;
     int azm = 0;
     int hoursMet = 0;
+    double cardioLoad = -1; // R5 E-09; below 0: none (a day closed before it)
 };
 
 struct DailyRecord {

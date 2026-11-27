@@ -204,6 +204,8 @@ private:
     void updateSkinTemp();
     // the days before today that have data and no closed row in health.db: closed now
     void closeDays();
+    // the cardio load of the days closed before it existed, once (R5 E-09)
+    void backfillCardioLoad(const QDate &yesterday);
     bool dayTotals(const QDate &day, Health::DailyTotals *totals);
     // the day's resting heart rate, estimated once (nightEndMs: the end of the night that ended on it, 0: none)
     int restingOf(const QDate &day, qint64 nightEndMs);

@@ -142,6 +142,7 @@ DaySummary summarizeDay(const QDate &day, const HealthProfile &profile, int rest
     d.floors = floorsClimbed(loadPressure(day), series);
     d.zones = zoneMinutes(series, MinuteSeries::minuteOf(from), MinuteSeries::minuteOf(to), profile, restingHr);
     d.hourly = hourlyActivity(series, day);
+    d.cardioLoad = cardioLoad(series, MinuteSeries::minuteOf(from), MinuteSeries::minuteOf(to), profile, restingHr);
     return d;
 }
 

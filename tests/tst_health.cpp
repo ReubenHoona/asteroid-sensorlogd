@@ -478,6 +478,48 @@ private slots:
         QCOMPARE(w.hoursMet, 2); // hours 8 (600) and 11 (300)
     }
 
+    // ---- cardio load (R5 E-09): Banister's TRIMP from a third of the reserve up, its target from 28 days ----
+    void cardioLoadIsTrimpOfTheEffortMinutes()
+    {
+        // resting 60, maximum 190 (30 years): reserve 130
+        QCOMPARE(trimpForMinute(98, 190, 60, HealthProfile::Male), 0.0);   // 29 % of the reserve: daily living
+        QCOMPARE(trimpForMinute(0, 190, 60, HealthProfile::Male), 0.0);
+        const double hrr = (125.0 - 60) / 130; // 0.5
+        QVERIFY(qAbs(trimpForMinute(125, 190, 60, HealthProfile::Male) - hrr * 0.64 * std::exp(1.92 * hrr)) < 1e-9);
+        QVERIFY(qAbs(trimpForMinute(125, 190, 60, HealthProfile::Female) - hrr * 0.86 * std::exp(1.67 * hrr)) < 1e-9);
+        const double mean = (trimpForMinute(125, 190, 60, HealthProfile::Male)
+                             + trimpForMinute(125, 190, 60, HealthProfile::Female)) / 2;
+        QVERIFY(qAbs(trimpForMinute(125, 190, 60, HealthProfile::Unspecified) - mean) < 1e-9);
+        // a harder minute costs more than its share
+        QVERIFY(trimpForMinute(164, 190, 60, HealthProfile::Male) > 2 * trimpForMinute(125, 190, 60, HealthProfile::Male));
+        // a 30-minute run at 70 % of the reserve and a quiet day: about 50 (stock's daily loads are tens)
+        MinuteSeries s;
+        fill(s, THU, 7, 0, 30, 150, 151);
+        fill(s, THU, 9, 0, 480, 0, 72);
+        const double load = cardioLoad(s, minuteAt(THU, 0), minuteAt(THU, 23, 59), profile(), 60);
+        QVERIFY2(load > 40 && load < 60, qPrintable(QString::number(load)));
+        QCOMPARE(cardioLoad(s, minuteAt(THU, 9), minuteAt(THU, 17), profile(), 60), 0.0);
+    }
+
+    void theCardioTargetIsTheLastWeeksWithCalibration()
+    {
+        CardioTarget t = cardioTarget({});
+        QVERIFY(!t.known);
+        QCOMPARE(t.daysLeft, 7);
+        t = cardioTarget({40, 50, -1, 60, 30, 20, 50}); // 6 days with a load
+        QVERIFY(!t.known);
+        QCOMPARE(t.daysLeft, 1);
+        t = cardioTarget({40, 50, 60, 30, 20, 50, 60});  // mean 44.29
+        QVERIFY(t.known);
+        QCOMPARE(t.daysLeft, 0);
+        QCOMPARE(t.low, 35);
+        QCOMPARE(t.high, 58);
+        t = cardioTarget({0, 0, 0, 0, 0, 0, 0});
+        QVERIFY(t.known);
+        QCOMPARE(t.low, 0);
+        QCOMPARE(t.high, 1);
+    }
+
     // ---- the most inactive span of a day (R5 E-21, stock's "Most inactive today") ----
     void theLongestInactiveSpanIsWornStillAndAwake()
     {

@@ -260,6 +260,47 @@ private slots:
         QCOMPARE(MGConfItem::testCreated() - before, 2 * HealthProfile::keys().size());
     }
 
+    // R5 E-09: the day's cardio load and its target: the closed days' loads from health.db, the day's own from its
+    // minutes; the summary has it too
+    void theCardioLoadAndItsTarget()
+    {
+        profileMale175();
+        const QDate d = day();
+        HealthDb store(healthDbPath());
+        // no history: calibrating, 7 days to go
+        addHeart(d, 7, 0, 30, 150);
+        HealthMetricsLoader loader;
+        QVariantMap c = loader.cardioLoad(d);
+        QVERIFY(!c["hasTarget"].toBool());
+        QCOMPARE(c["daysLeft"].toInt(), 7);
+        QCOMPARE(c["state"].toString(), QString());
+        const int load = c["load"].toInt();
+        QVERIFY(load > 20);
+        QCOMPARE(qRound(loader.summary(d)["cardioLoad"].toDouble()), load);
+        // 7 closed days before it, 40 each: target 32-52; the day's own load decides the state
+        for (int i = 1; i <= 7; i++) {
+            DailyTotals t;
+            t.cardioLoad = 40;
+            QVERIFY(store.setDailyTotals(d.addDays(-i), t, ms(d.addDays(1 - i), 0, 30)));
+        }
+        // a closed day before the cardio load (none in its row) is not a day of the target
+        DailyTotals old;
+        QVERIFY(store.setDailyTotals(d.addDays(-8), old, ms(d.addDays(-7), 0, 30)));
+        DailyRecord r;
+        QVERIFY(HealthDb::readDaily(healthDbPath(), d.addDays(-8), &r));
+        QCOMPARE(r.totals.cardioLoad, -1.0);
+        c = loader.cardioLoad(d);
+        QVERIFY(c["hasTarget"].toBool());
+        QCOMPARE(c["low"].toInt(), 32);
+        QCOMPARE(c["high"].toInt(), 52);
+        QCOMPARE(c["state"].toString(), load < 32 ? QString("below") : load > 52 ? QString("above") : QString("in"));
+        const QVariantList week = c["week"].toList();
+        QCOMPARE(week.size(), 7);
+        QCOMPARE(week[0].toMap()["load"].toInt(), 40);
+        QCOMPARE(week[6].toMap()["load"].toInt(), load);
+        QCOMPARE(week[6].toMap()["date"].toDate(), d);
+    }
+
     // R5 E-21: the hourly page's "Most inactive today" from the day's files, the day's sleep left out
     void theHourlyActivityHasTheDaysMostInactiveSpan()
     {

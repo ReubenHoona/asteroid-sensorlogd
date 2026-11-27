@@ -277,7 +277,8 @@ WorkoutRecord workoutFrom(const Stmt &q)
     return w;
 }
 
-const char *const DAILY_COLUMNS = "date, resting_hr, steps, kcal, distance_m, floors, azm, hours_met, closed_ms, seq";
+const char *const DAILY_COLUMNS =
+    "date, resting_hr, steps, kcal, distance_m, floors, azm, hours_met, closed_ms, seq, cardio_load";
 
 DailyRecord dailyFrom(const Stmt &q)
 {
@@ -293,6 +294,7 @@ DailyRecord dailyFrom(const Stmt &q)
     r.totals.hoursMet = q.i(7);
     r.closedMs = q.isNull(8) ? 0 : q.i64(8);
     r.seq = q.i64(9);
+    r.totals.cardioLoad = q.isNull(10) ? -1 : q.d(10);
     return r;
 }
 
@@ -339,7 +341,8 @@ QVariantMap DailyRecord::toMap() const
 {
     return QVariantMap{{"date", date}, {"restingHr", restingHr}, {"closed", closed}, {"steps", totals.steps},
                        {"kcal", totals.kcal}, {"distanceM", totals.distanceM}, {"floors", totals.floors},
-                       {"azm", totals.azm}, {"hoursMet", totals.hoursMet}, {"closedMs", closedMs}, {"seq", seq}};
+                       {"azm", totals.azm}, {"hoursMet", totals.hoursMet}, {"closedMs", closedMs}, {"seq", seq},
+                       {"cardioLoad", totals.cardioLoad}};
 }
 
 HealthDb::HealthDb(const QString &path) : m_path(path)
@@ -810,16 +813,21 @@ bool HealthDb::setDailyTotals(const QDate &date, const DailyTotals &t, qint64 cl
     const qint64 before = seq();
     if (!begin())
         return false;
-    Stmt q(m_db, "INSERT INTO daily (date, steps, kcal, distance_m, floors, azm, hours_met, closed_ms) "
-                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (date) DO UPDATE SET steps = excluded.steps, "
+    Stmt q(m_db, "INSERT INTO daily (date, steps, kcal, distance_m, floors, azm, hours_met, closed_ms, cardio_load) "
+                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (date) DO UPDATE SET steps = excluded.steps, "
                  "kcal = excluded.kcal, distance_m = excluded.distance_m, floors = excluded.floors, "
-                 "azm = excluded.azm, hours_met = excluded.hours_met, closed_ms = excluded.closed_ms "
+                 "azm = excluded.azm, hours_met = excluded.hours_met, closed_ms = excluded.closed_ms, "
+                 "cardio_load = excluded.cardio_load "
                  "WHERE steps IS NOT excluded.steps OR kcal IS NOT excluded.kcal OR distance_m IS NOT excluded.distance_m "
                  "OR floors IS NOT excluded.floors OR azm IS NOT excluded.azm OR hours_met IS NOT excluded.hours_met "
-                 "OR closed_ms IS NULL");
+                 "OR cardio_load IS NOT excluded.cardio_load OR closed_ms IS NULL");
     q.bind(1, date.toString(Qt::ISODate)).bind(2, qMax(0, t.steps)).bind(3, qMax(0.0, t.kcal))
             .bind(4, qMax(0.0, t.distanceM)).bind(5, qMax(0, t.floors)).bind(6, qMax(0, t.azm))
             .bind(7, qMax(0, t.hoursMet)).bind(8, closedMs);
+    if (t.cardioLoad >= 0)
+        q.bind(9, t.cardioLoad);
+    else
+        q.bindNull(9);
     if (!q.ok() || !q.run()) {
         rollback(true);
         return false;

@@ -107,6 +107,45 @@ QVariantMap HealthMetricsLoader::mainGoal()
     return QVariantMap{{"type", goal.metric()}, {"target", goal.target}};
 }
 
+// A day's cardio load: today's from its minutes up to now, a day before it from its closed row in health.db (its
+// minutes if it has none yet: a day not closed). The target from the closed rows of the 28 days before it.
+QVariantMap HealthMetricsLoader::cardioLoad(QDate date)
+{
+    const QDate today = QDate::currentDate();
+    QMap<QDate, double> loads;
+    for (const DailyRecord &r : HealthDb::readDailyRange(healthDbPath(), date.addDays(-CARDIO_HISTORY_DAYS), date))
+        if (r.totals.cardioLoad >= 0)
+            loads.insert(r.date, r.totals.cardioLoad);
+    auto loadOf = [&](const QDate &d) {
+        if (d > today)
+            return -1.0;
+        if (d != today && loads.contains(d))
+            return loads.value(d);
+        if (d != today && d < today.addDays(-1))
+            return -1.0; // closed with no load: a day before the cardio load
+        return summary(d).value("cardioLoad").toDouble();
+    };
+    QList<double> history;
+    for (QDate d = date.addDays(-CARDIO_HISTORY_DAYS); d < date; d = d.addDays(1))
+        if (loads.contains(d))
+            history << loads.value(d);
+    const CardioTarget target = cardioTarget(history);
+    const double load = loadOf(date);
+    QVariantList week;
+    for (int i = 6; i >= 0; i--) {
+        const QDate d = date.addDays(-i);
+        const double l = i == 0 ? load : loadOf(d);
+        week << QVariantMap{{"date", QDateTime(d, QTime(0, 0))}, {"load", l >= 0 ? (int)std::lround(l) : -1}};
+    }
+    const int rounded = load >= 0 ? (int)std::lround(load) : 0;
+    QString state;
+    if (target.known)
+        state = rounded < target.low ? QStringLiteral("below") : rounded > target.high ? QStringLiteral("above")
+                                                                                      : QStringLiteral("in");
+    return QVariantMap{{"load", rounded}, {"hasTarget", target.known}, {"low", target.low}, {"high", target.high},
+                       {"daysLeft", target.daysLeft}, {"state", state}, {"week", week}};
+}
+
 int HealthMetricsLoader::azmWeeklyGoal() const { return AZM_WEEKLY_GOAL; }
 int HealthMetricsLoader::hourlyStepGoal() const { return HOURLY_STEPS; }
 
@@ -136,6 +175,7 @@ QVariantMap HealthMetricsLoader::summary(QDate date)
     m["restingHr"] = c.resting;
     m["maxHr"] = c.profile.maxHr();
     m["strideM"] = strideM(c.profile);
+    m["cardioLoad"] = d.cardioLoad;
     return m;
 }
 

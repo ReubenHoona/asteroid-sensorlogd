@@ -133,6 +133,32 @@ HourlyActivity hourlyActivity(const MinuteSeries &series, const QDate &day, int 
 static const int HOURLY_STEPS = 250;
 static const int AZM_WEEKLY_GOAL = 150;
 
+// Cardio load (R5 E-09). Stock's Cardio load (tile, complication, Today card, details: "Cardio load" 0x7f140139,
+// "Target %1$d–%2$d" 0x7f140138, "In target" 0x7f140141 / "Above target" 0x7f140137, "See target load in %d days"
+// plurals 0x7f120006) is computed on the watch from the heart rate (Health Services' passive "CardioLoad" client,
+// D/doa.java:248-253) and its target in the cloud (PLAN F22; Google's help page: TRIMP, the heart rate weighted by
+// effort). Ours (guess): Banister's TRIMP of every minute with a heart rate at CARDIO_FROM_HRR of the reserve and
+// above (below it is daily living, not training): HRR x 0.64 e^(1.92 HRR) for a man, 0.86 e^(1.67 HRR) for a woman,
+// their mean when the gender is not set. The target range: CARDIO_TARGET_LOW..HIGH of the mean daily load of the 28
+// days before (the days that have one; an acute:chronic ratio of 0.8-1.3, guess), once CARDIO_CALIBRATION_DAYS of
+// them have one.
+static const double CARDIO_FROM_HRR = 0.30;
+static const double CARDIO_TARGET_LOW = 0.8;
+static const double CARDIO_TARGET_HIGH = 1.3;
+static const int CARDIO_CALIBRATION_DAYS = 7;
+static const int CARDIO_HISTORY_DAYS = 28;
+double trimpForMinute(double bpm, int maxHr, int restingHr, HealthProfile::Sex sex);
+// the minutes [fromMinute, toMinute) that have a heart rate
+double cardioLoad(const MinuteSeries &series, qint64 fromMinute, qint64 toMinute, const HealthProfile &profile,
+                  int restingHr);
+struct CardioTarget {
+    bool known = false; // enough days for a target
+    int daysLeft = 0;   // days with a load still needed for one
+    int low = 0, high = 0;
+};
+// from the daily loads of the days before (any order; days without a load not in the list)
+CardioTarget cardioTarget(const QList<double> &dailyLoads);
+
 // The longest inactive span of a day (R5 E-21): stock's hourly activity page shows "Most inactive today" with its
 // times and length (yum.java:425-433, 0x7f14099c): the day's longest SEDENTARY_PERIOD of Health Services (one.java:
 // MAX(duration) of the day's sedentary periods), which the hub makes. Ours (guess): the longest run of minutes of
