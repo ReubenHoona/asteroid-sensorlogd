@@ -22,6 +22,8 @@ add_executable(
     healthMonitor.h
     healthNotifier.cpp
     healthNotifier.h
+    healthLanguage.cpp
+    healthLanguage.h
     healthWake.h
     keepaliveWake.cpp
     keepaliveWake.h

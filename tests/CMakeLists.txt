@@ -60,6 +60,7 @@ add_library(sensorlogd-undertest STATIC
     ${top}/qmlplugin/loggerSettings.cpp ${top}/qmlplugin/loggerSettings.h
     ${top}/daemon/healthMonitor.cpp ${top}/daemon/healthMonitor.h
     ${top}/daemon/healthNotifier.cpp ${top}/daemon/healthNotifier.h
+    ${top}/daemon/healthLanguage.cpp ${top}/daemon/healthLanguage.h
     ${top}/daemon/healthWake.h
     ${top}/daemon/keepaliveWake.cpp ${top}/daemon/keepaliveWake.h
     ${top}/metrics/healthProfile.cpp ${top}/metrics/healthProfile.h
@@ -88,8 +89,11 @@ endif()
 # tst_offbody the hub's off-body state, the monitor's worn() and what is left out off the wrist (WO-03), tst_sleep
 # the sleep estimate of version 2 on invented nights, its timeline in health.db and the day's naps (WO-06),
 # tst_skintemp the skin temperature: the hub's readings, when they are taken, the night's value and variation (WO-13).
+# tst_language the notifications' language (R6 K-05): the English without a catalogue, a language change from
+# localed, the nearest catalogue, and the daemon's own German and Russian catalogues (i18n/), made with Qt's lrelease
+# when Qt6LinguistTools is there (else those cases are skipped).
 foreach(name common heartrate barometer dataloaders health monitor healthloaders store api activity workouthub offbody
-        sleep skintemp)
+        sleep skintemp language)
     add_executable(tst_${name} tst_${name}.cpp testenv.h peek.h)
     target_link_libraries(tst_${name} PRIVATE sensorlogd-undertest)
     if(SENSORLOGD_JUNIT_DIR)
@@ -99,3 +103,22 @@ foreach(name common heartrate barometer dataloaders health monitor healthloaders
     endif()
     set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
 endforeach()
+
+find_package(Qt6 QUIET OPTIONAL_COMPONENTS LinguistTools)
+if(TARGET Qt6::lrelease)
+    set(qmdir ${CMAKE_CURRENT_BINARY_DIR}/i18n)
+    file(MAKE_DIRECTORY ${qmdir})
+    set(qms "")
+    foreach(ts ${CMAKE_CURRENT_SOURCE_DIR}/i18n/tst-health.de_DE.ts ${CMAKE_CURRENT_SOURCE_DIR}/i18n/tst-health.fr.ts
+            ${top}/i18n/sensorlogd.de_DE.ts ${top}/i18n/sensorlogd.ru.ts)
+        get_filename_component(base ${ts} NAME_WE)
+        get_filename_component(ext ${ts} EXT)
+        string(REGEX REPLACE "\\.ts$" ".qm" qm "${base}${ext}")
+        add_custom_command(OUTPUT ${qmdir}/${qm} COMMAND Qt6::lrelease -silent ${ts} -qm ${qmdir}/${qm} DEPENDS ${ts}
+            VERBATIM)
+        list(APPEND qms ${qmdir}/${qm})
+    endforeach()
+    add_custom_target(tst_language_catalogues DEPENDS ${qms})
+    add_dependencies(tst_language tst_language_catalogues)
+    target_compile_definitions(tst_language PRIVATE TST_I18N_DIR="${qmdir}")
+endif()

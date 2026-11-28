@@ -18,6 +18,7 @@
 #include <QTime>
 
 #include "healthMonitor.h"
+#include "healthLanguage.h"
 #include "sensorPlugins/heartrateSensor.h"
 #include "sensorPlugins/stepCounter.h"
 #include "../common.h"
@@ -458,15 +459,27 @@ void HealthMonitor::releaseCelebrations()
     }
 }
 
-// stock's texts: stock/STRINGS.tsv 0x7f14034c/d (titles), 0x7f1409a0 (N bpm), 0x7f1409a1 / 0x7f1409a3 (detail)
+// stock's texts: stock/STRINGS.tsv 0x7f14034c/d (titles), 0x7f1409a0 (N bpm), 0x7f1409a1 / 0x7f1409a3 (detail),
+// in the watch's language (R6 K-05: healthLanguage.h; the English here is what shows without a catalogue)
 void HealthMonitor::postAlert(const HrAlert &alert)
 {
+    using HealthText::text;
     const bool high = alert.kind == HrAlert::High;
     HealthNotification n;
-    n.summary = high ? QStringLiteral("High heart rate") : QStringLiteral("Low heart rate");
-    n.body = QStringLiteral("%1 bpm").arg(alert.bpm);
-    const QString detail = QStringLiteral("Your heart rate %1 %2 bpm while you appeared to be inactive from %3 - %4.")
-            .arg(high ? "rose above" : "fell below").arg(alert.threshold).arg(clockText(alert.startMs))
+    //% "High heart rate"
+    const QString highTitle = text(QT_TRID_NOOP("id-health-hr-high"), "High heart rate");
+    //% "Low heart rate"
+    const QString lowTitle = text(QT_TRID_NOOP("id-health-hr-low"), "Low heart rate");
+    n.summary = high ? highTitle : lowTitle;
+    //% "%1 bpm"
+    n.body = text(QT_TRID_NOOP("id-health-bpm"), "%1 bpm").arg(alert.bpm);
+    //% "Your heart rate rose above %1 bpm while you appeared to be inactive from %2 - %3."
+    const QString rose = text(QT_TRID_NOOP("id-health-hr-high-detail"),
+                              "Your heart rate rose above %1 bpm while you appeared to be inactive from %2 - %3.");
+    //% "Your heart rate fell below %1 bpm while you appeared to be inactive from %2 - %3."
+    const QString fell = text(QT_TRID_NOOP("id-health-hr-low-detail"),
+                              "Your heart rate fell below %1 bpm while you appeared to be inactive from %2 - %3.");
+    const QString detail = (high ? rose : fell).arg(alert.threshold).arg(clockText(alert.startMs))
             .arg(clockText(alert.endMs));
     n.hints.insert("x-asteroid-category", QStringLiteral("health-alert"));
     n.hints.insert("x-asteroid-detail", detail);
@@ -486,27 +499,35 @@ void HealthMonitor::postAlert(const HrAlert &alert)
 // (its b(): current/max), DailyReminderToMoveCelebration "Hourly Activity" / "Goal complete!\n9 hr"
 void HealthMonitor::postMove(const MoveEvent &event)
 {
+    using HealthText::text;
     HealthNotification n;
     n.icon = QStringLiteral("ios-walk");
     n.hints.insert("x-asteroid-category", QStringLiteral("celebration"));
     n.hints.insert("transient", true);
+    //% "Reminder to move"
+    const QString title = text(QT_TRID_NOOP("id-health-move-title"), "Reminder to move");
+    //% "Goal complete!"
+    const QString complete = text(QT_TRID_NOOP("id-health-goal-complete"), "Goal complete!");
     switch (event.kind) {
     case MoveEvent::Remind:
-        n.summary = QStringLiteral("Reminder to move");
-        n.body = event.stepsLeft == 1 ? QStringLiteral("1 step left\nthis hour")
-                                      : QStringLiteral("%1 steps left\nthis hour").arg(event.stepsLeft);
+        n.summary = title;
+        //% "%n steps left\nthis hour"
+        n.body = HealthText::textN(QT_TRID_N_NOOP("id-health-steps-left"), event.stepsLeft, "%n step left\nthis hour",
+                                   "%n steps left\nthis hour");
         n.hints.insert("x-asteroid-health", json({{"type", "reminder-to-move"}, {"steps", event.steps},
                                                   {"goal", HOURLY_STEPS}}));
         break;
     case MoveEvent::HourComplete:
-        n.summary = QStringLiteral("Reminder to move");
-        n.body = QStringLiteral("Goal complete!\n%1/%1").arg(HOURLY_STEPS);
+        n.summary = title;
+        n.body = complete + QStringLiteral("\n%1/%1").arg(HOURLY_STEPS);
         n.hints.insert("x-asteroid-health", json({{"type", "reminder-to-move-complete"}, {"steps", event.steps},
                                                   {"goal", HOURLY_STEPS}}));
         break;
     case MoveEvent::DayComplete:
-        n.summary = QStringLiteral("Hourly Activity");
-        n.body = QStringLiteral("Goal complete!\n%1 hr").arg(event.hoursMet);
+        //% "Hourly Activity"
+        n.summary = text(QT_TRID_NOOP("id-health-hourly-activity"), "Hourly Activity");
+        //% "%1 hr"
+        n.body = complete + QLatin1Char('\n') + text(QT_TRID_NOOP("id-health-hours"), "%1 hr").arg(event.hoursMet);
         n.hints.insert("x-asteroid-health", json({{"type", "hourly-activity"}, {"hours", event.hoursMet}}));
         // a goal achieved: the launcher's screen vibrates (twice), the post does not
         n.hints.insert("x-nemo-feedback", QString());
@@ -522,31 +543,42 @@ void HealthMonitor::postMove(const MoveEvent &event)
 // "Goal complete!\n10,000". No vibration of the post's: the launcher's screen vibrates.
 void HealthMonitor::postGoal(const MainGoal &goal, double value)
 {
+    using HealthText::text;
     HealthNotification n;
     QString valueText;
     switch (goal.type) {
     case GoalType::Steps:
-        n.summary = QStringLiteral("Steps");
+        //% "Steps"
+        n.summary = text(QT_TRID_NOOP("id-health-steps"), "Steps");
         valueText = QLocale::c().toString((int)std::lround(value));
         break;
     case GoalType::Calories:
-        n.summary = QStringLiteral("Calories");
-        valueText = QStringLiteral("%1 cal").arg(QLocale::c().toString((int)std::lround(value)));
+        //% "Calories"
+        n.summary = text(QT_TRID_NOOP("id-health-calories"), "Calories");
+        //% "%1 cal"
+        valueText = text(QT_TRID_NOOP("id-health-cal"), "%1 cal").arg(QLocale::c().toString((int)std::lround(value)));
         break;
     case GoalType::Distance:
-        n.summary = QStringLiteral("Distance");
-        valueText = QStringLiteral("%1 km").arg(QLocale::c().toString(value / 1000.0, 'f', 2));
+        //% "Distance"
+        n.summary = text(QT_TRID_NOOP("id-health-distance"), "Distance");
+        //% "%1 km"
+        valueText = text(QT_TRID_NOOP("id-health-km"), "%1 km").arg(QLocale::c().toString(value / 1000.0, 'f', 2));
         break;
     case GoalType::Floors:
-        n.summary = QStringLiteral("Floors");
-        valueText = QStringLiteral("%1 floors").arg((int)std::lround(value));
+        //% "Floors"
+        n.summary = text(QT_TRID_NOOP("id-health-floors-title"), "Floors");
+        //% "%1 floors"
+        valueText = text(QT_TRID_NOOP("id-health-floors"), "%1 floors").arg((int)std::lround(value));
         break;
     case GoalType::Azm:
-        n.summary = QStringLiteral("Active Zone Min");
-        valueText = QStringLiteral("%1 Zone Mins").arg((int)std::lround(value));
+        //% "Active Zone Min"
+        n.summary = text(QT_TRID_NOOP("id-health-azm"), "Active Zone Min");
+        //% "%1 Zone Mins"
+        valueText = text(QT_TRID_NOOP("id-health-zone-mins"), "%1 Zone Mins").arg((int)std::lround(value));
         break;
     }
-    n.body = QStringLiteral("Goal complete!\n%1").arg(valueText);
+    //% "Goal complete!"
+    n.body = text(QT_TRID_NOOP("id-health-goal-complete"), "Goal complete!") + QLatin1Char('\n') + valueText;
     n.icon = QStringLiteral("ios-trophy");
     n.hints.insert("x-asteroid-category", QStringLiteral("celebration"));
     n.hints.insert("transient", true);
@@ -561,8 +593,10 @@ void HealthMonitor::postGoal(const MainGoal &goal, double value)
 void HealthMonitor::postExercise(const ExerciseOffer &offer)
 {
     HealthNotification n;
-    n.summary = QStringLiteral("Activity detected");
-    n.body = QStringLiteral("Start tracking?");
+    //% "Activity detected"
+    n.summary = HealthText::text(QT_TRID_NOOP("id-health-activity-detected"), "Activity detected");
+    //% "Start tracking?"
+    n.body = HealthText::text(QT_TRID_NOOP("id-health-start-tracking"), "Start tracking?");
     n.icon = QStringLiteral("ios-walk");
     n.hints.insert("x-asteroid-category", QStringLiteral("exercise-detect"));
     n.hints.insert("transient", true);
@@ -706,8 +740,10 @@ void HealthMonitor::postMorningBrief(const SleepNight &night)
             return;
     m_settings->setValue("HealthPrivate/briefDay", local.date().toJulianDay());
     HealthNotification n;
-    n.summary = QStringLiteral("Start your day");
-    n.body = QString::fromUtf8("Good morning! Here’s how your day is shaping up.");
+    //% "Start your day"
+    n.summary = HealthText::text(QT_TRID_NOOP("id-health-brief-title"), "Start your day");
+    //% "Good morning! Here’s how your day is shaping up."
+    n.body = HealthText::text(QT_TRID_NOOP("id-health-brief-text"), "Good morning! Here’s how your day is shaping up.");
     n.icon = QStringLiteral("ios-sunny");
     n.hints.insert("x-eos-app", QStringLiteral("asteroid-health"));
     n.hints.insert("x-eos-open-page", QStringLiteral("morning"));

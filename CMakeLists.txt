@@ -15,6 +15,7 @@ include(GNUInstallDirs)
 include(KDEInstallDirs)
 include(ECMFindQmlModule)
 include(Asteroid6CMakeSettings)
+include(Asteroid6Translations)
 
 find_package(Qt6 COMPONENTS Core DBus Qml Sensors REQUIRED)
 pkg_check_modules(mlite6 REQUIRED mlite6)
@@ -41,5 +42,10 @@ set(HEALTH_METRICS_SOURCES
 )
 add_subdirectory(daemon)
 add_subdirectory(qmlplugin)
+
+# the Health notifications' catalogues (R6 K-05, daemon/healthLanguage.h): i18n/sensorlogd.<locale>.ts, stock's
+# translations of its texts, into /usr/share/translations (and sensorlogd.en.qm from the daemon's //% texts, which
+# the daemon does not load: its code has the English)
+build_translations(i18n daemon)
 
 feature_summary(WHAT ALL FATAL_ON_MISSING_REQUIRED_PACKAGES)

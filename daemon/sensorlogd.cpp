@@ -16,6 +16,7 @@
 #include <QDBusConnection>
 #include <QDebug>
 #include <QSocketNotifier>
+#include "healthLanguage.h"
 #include "logger.h"
 
 static int quitPipe[2] = { -1, -1 };
@@ -53,6 +54,11 @@ int main(int argc, char **argv)
         sigaction(SIGTERM, &sa, nullptr);
         sigaction(SIGINT, &sa, nullptr);
     }
+
+    // the Health notifications in the watch's language, and a language chosen while the daemon runs (R6 K-05)
+    HealthLanguage language(QStringLiteral("sensorlogd"), QStringLiteral("/usr/share/translations"));
+    language.install();
+    language.watch(QDBusConnection::systemBus());
 
     Logger sensorsLogger;
     qDebug() << "sensorlogd starting";
