@@ -17,11 +17,11 @@
     </message>
     <message id="id-health-hr-high-detail">
         <source>Your heart rate rose above %1 bpm while you appeared to be inactive from %2 - %3.</source>
-        <translation>%2 - %3 तक ऐक्टिव न रहने के दौरान, आपकी धड़कन की दर %1 धड़कन प्रति मिनट (बीपीएम) से ज़्यादा हो गई थी.&quot;</translation>
+        <translation>%2 - %3 तक ऐक्टिव न रहने के दौरान, आपकी धड़कन की दर %1 धड़कन प्रति मिनट (बीपीएम) से ज़्यादा हो गई थी.</translation>
     </message>
     <message id="id-health-hr-low-detail">
         <source>Your heart rate fell below %1 bpm while you appeared to be inactive from %2 - %3.</source>
-        <translation>%2 - %3 तक ऐक्टिव न रहने के दौरान, आपकी धड़कन की दर %1 धड़कन प्रति मिनट (बीपीएम) से कम हो गई थी.&quot;</translation>
+        <translation>%2 - %3 तक ऐक्टिव न रहने के दौरान, आपकी धड़कन की दर %1 धड़कन प्रति मिनट (बीपीएम) से कम हो गई थी.</translation>
     </message>
     <message id="id-health-move-title">
         <source>Reminder to move</source>

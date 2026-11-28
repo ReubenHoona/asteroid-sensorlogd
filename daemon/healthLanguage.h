@@ -35,10 +35,11 @@ namespace HealthText {
 }
 
 /*
- * The daemon's language. install() loads the catalogue of the default locale, <name>.<locale>.qm in directory
- * (QTranslator's own search: de_DE, then de), else the language's catalogue of another region (the phone's de_AT
- * reads de_DE: the rule of AsteroidApp and the launcher, R5 C-04); the English one build_translations makes
- * (<name>.en.qm) is not taken, the code has the English with its plural.
+ * The daemon's language. install() loads the catalogue of the default locale as every program of the image chooses
+ * it (eoscatalogues.h, the same file as AsteroidApp's and the launcher's): an English region of CLDR's en_001
+ * (en_NZ, en_AU, en_IE, en_IN...) reads en_GB's, else QTranslator's own search (de_DE, then de), else the
+ * language's catalogue of another region (the phone's de_AT reads de_DE, R5 C-04); the English one
+ * build_translations makes (<name>.en.qm) is not taken, the code has the English with its plural.
  * A language chosen while the daemon runs is followed (C-03, as the apps' LocaleFollower): Settings > Language, setup
  * and the phone's language set the locale through systemd-localed (org.freedesktop.locale1 SetLocale), and localed
  * announces the new Locale with org.freedesktop.DBus.Properties.PropertiesChanged on the system bus; its LANG becomes

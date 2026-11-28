@@ -17,11 +17,11 @@
     </message>
     <message id="id-health-hr-high-detail">
         <source>Your heart rate rose above %1 bpm while you appeared to be inactive from %2 - %3.</source>
-        <translation>%2 - %3 arasında hareketsiz görünürken nabzınız %1 nabız/dk&apos;nın üzerine çıktı.&quot;</translation>
+        <translation>%2 - %3 arasında hareketsiz görünürken nabzınız %1 nabız/dk&apos;nın üzerine çıktı.</translation>
     </message>
     <message id="id-health-hr-low-detail">
         <source>Your heart rate fell below %1 bpm while you appeared to be inactive from %2 - %3.</source>
-        <translation>%2 - %3 arasında hareketsiz görünürken nabzınız %1 nabız/dk&apos;nın altına düştü.&quot;</translation>
+        <translation>%2 - %3 arasında hareketsiz görünürken nabzınız %1 nabız/dk&apos;nın altına düştü.</translation>
     </message>
     <message id="id-health-move-title">
         <source>Reminder to move</source>

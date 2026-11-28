@@ -9,6 +9,7 @@
  */
 
 #include "healthLanguage.h"
+#include "eoscatalogues.h"
 
 #include <QCoreApplication>
 #include <QDBusArgument>
@@ -17,7 +18,6 @@
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
 #include <QDBusVariant>
-#include <QDir>
 #include <QFileInfo>
 #include <QTranslator>
 
@@ -61,32 +61,18 @@ void HealthLanguage::remove()
 
 QString HealthLanguage::nearest(const QString &name, const QString &directory, const QLocale &locale)
 {
-    if (locale.language() == QLocale::C || locale.language() == QLocale::AnyLanguage)
-        return QString();
-    const QString lang = QLocale::languageToCode(locale.language());
-    const QDir dir(directory);
-    const QStringList found = dir.entryList({ name + QLatin1Char('.') + lang + QStringLiteral("_*.qm") },
-                                            QDir::Files, QDir::Name);
-    if (found.isEmpty())
-        return QString();
-    const QString main = name + QLatin1Char('.') + QLocale(lang).name() + QStringLiteral(".qm");
-    return dir.filePath(found.contains(main) ? main : found.first());
+    return EosCatalogues::nearest(name, directory, locale);
 }
 
 bool HealthLanguage::install()
 {
     remove();
-    const QLocale locale;
+    // the locale's catalogue as every program of the image chooses it (eoscatalogues.h): an English region of
+    // en_001 (en_NZ, en_AU...) reads en_GB's, a region without one its language's (de_AT: de_DE); the build's
+    // English catalogue has one form for every count ("1 steps left"): the code's English is better
     QTranslator *t = new QTranslator(this);
-    bool loaded = t->load(locale, m_name, QStringLiteral("."), m_dir, QStringLiteral(".qm"));
-    // the build's English catalogue has one form for every count ("1 steps left"): the code's English is better
-    if (loaded && QFileInfo(t->filePath()).fileName() == m_name + QStringLiteral(".en.qm"))
-        loaded = false;
-    if (!loaded) {
-        const QString other = nearest(m_name, m_dir, locale);
-        loaded = !other.isEmpty() && t->load(other);
-    }
-    if (!loaded) {
+    if (!EosCatalogues::load(t, m_name, m_dir, QLocale())
+        || QFileInfo(t->filePath()).fileName() == m_name + QStringLiteral(".en.qm")) {
         delete t;
         return false;
     }

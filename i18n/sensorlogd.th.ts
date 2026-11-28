@@ -17,11 +17,11 @@
     </message>
     <message id="id-health-hr-high-detail">
         <source>Your heart rate rose above %1 bpm while you appeared to be inactive from %2 - %3.</source>
-        <translation>อัตราการเต้นของหัวใจสูงกว่า %1 bpm ขณะที่คุณดูเหมือนจะไม่ได้เคลื่อนไหวตั้งแต่ %2 - %3&quot;</translation>
+        <translation>อัตราการเต้นของหัวใจสูงกว่า %1 bpm ขณะที่คุณดูเหมือนจะไม่ได้เคลื่อนไหวตั้งแต่ %2 - %3</translation>
     </message>
     <message id="id-health-hr-low-detail">
         <source>Your heart rate fell below %1 bpm while you appeared to be inactive from %2 - %3.</source>
-        <translation>อัตราการเต้นของหัวใจลดลงต่ำกว่า %1 bpm ขณะที่คุณดูเหมือนจะไม่ได้เคลื่อนไหวตั้งแต่ %2 - %3&quot;</translation>
+        <translation>อัตราการเต้นของหัวใจลดลงต่ำกว่า %1 bpm ขณะที่คุณดูเหมือนจะไม่ได้เคลื่อนไหวตั้งแต่ %2 - %3</translation>
     </message>
     <message id="id-health-move-title">
         <source>Reminder to move</source>

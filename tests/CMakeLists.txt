@@ -60,7 +60,7 @@ add_library(sensorlogd-undertest STATIC
     ${top}/qmlplugin/loggerSettings.cpp ${top}/qmlplugin/loggerSettings.h
     ${top}/daemon/healthMonitor.cpp ${top}/daemon/healthMonitor.h
     ${top}/daemon/healthNotifier.cpp ${top}/daemon/healthNotifier.h
-    ${top}/daemon/healthLanguage.cpp ${top}/daemon/healthLanguage.h
+    ${top}/daemon/healthLanguage.cpp ${top}/daemon/healthLanguage.h ${top}/daemon/eoscatalogues.h
     ${top}/daemon/healthWake.h
     ${top}/daemon/keepaliveWake.cpp ${top}/daemon/keepaliveWake.h
     ${top}/metrics/healthProfile.cpp ${top}/metrics/healthProfile.h
@@ -110,7 +110,8 @@ if(TARGET Qt6::lrelease)
     file(MAKE_DIRECTORY ${qmdir})
     set(qms "")
     foreach(ts ${CMAKE_CURRENT_SOURCE_DIR}/i18n/tst-health.de_DE.ts ${CMAKE_CURRENT_SOURCE_DIR}/i18n/tst-health.fr.ts
-            ${top}/i18n/sensorlogd.de_DE.ts ${top}/i18n/sensorlogd.ru.ts)
+            ${CMAKE_CURRENT_SOURCE_DIR}/i18n/tst-health.en_GB.ts ${CMAKE_CURRENT_SOURCE_DIR}/i18n/tst-health.en.ts
+            ${top}/i18n/sensorlogd.de_DE.ts ${top}/i18n/sensorlogd.ru.ts ${top}/i18n/sensorlogd.en_GB.ts)
         get_filename_component(base ${ts} NAME_WE)
         get_filename_component(ext ${ts} EXT)
         string(REGEX REPLACE "\\.ts$" ".qm" qm "${base}${ext}")

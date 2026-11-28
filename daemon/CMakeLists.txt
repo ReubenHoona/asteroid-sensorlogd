@@ -24,6 +24,7 @@ add_executable(
     healthNotifier.h
     healthLanguage.cpp
     healthLanguage.h
+    eoscatalogues.h
     healthWake.h
     keepaliveWake.cpp
     keepaliveWake.h

@@ -68,7 +68,7 @@ private slots:
 #else
         HealthLanguage language(QStringLiteral("tst-health"), QStringLiteral(TST_I18N_DIR));
         QCOMPARE(language.language(), QStringLiteral("en_GB.utf8"));
-        QVERIFY(!language.install()); // en_GB: no catalogue, the English
+        QVERIFY(language.install()); // en_GB: its catalogue (id-tst-colour only), Hello is the code's English
         QCOMPARE(text("id-tst-hello", "Hello"), QStringLiteral("Hello"));
         QSignalSpy changed(&language, &HealthLanguage::languageChanged);
 
@@ -111,6 +111,38 @@ private slots:
         say(language, "en_GB.utf8");
         QCOMPARE(text("id-tst-hello", "Hello"), QStringLiteral("Hello"));
         QCOMPARE(changed.count(), 5);
+#endif
+    }
+
+    // R6 K-05: an English region of CLDR's en_001 without a catalogue of its own reads en_GB's (stock's
+    // values-en-rGB); the US and its territories the code's English (the build's <name>.en.qm is never taken)
+    void englishRegions()
+    {
+#ifndef TST_I18N_DIR
+        QSKIP("no lrelease: catalogue cases not built");
+#else
+        HealthLanguage language(QStringLiteral("tst-health"), QStringLiteral(TST_I18N_DIR));
+        for (const char *lang : { "en_NZ.utf8", "en_AU.utf8", "en_IE.utf8", "en_IN.utf8", "en_GB.utf8" }) {
+            say(language, lang);
+            QVERIFY2(text("id-tst-colour", "Color") == QStringLiteral("Colour"), lang);
+            QCOMPARE(text("id-tst-hello", "Hello"), QStringLiteral("Hello"));
+        }
+        for (const char *lang : { "en_US.utf8", "en_PR.utf8" }) {
+            say(language, lang);
+            QVERIFY2(text("id-tst-colour", "Color") == QStringLiteral("Color"), lang);
+        }
+        say(language, "de_AT.utf8");
+        QCOMPARE(text("id-tst-hello", "Hello"), QStringLiteral("Hallo"));
+        QCOMPARE(text("id-tst-colour", "Color"), QStringLiteral("Color"));
+        // the daemon's own: the phone's en-NZ reads its en_GB catalogue (stock's en-GB "Hourly activity")
+        HealthLanguage daemon(QStringLiteral("sensorlogd"), QStringLiteral(TST_I18N_DIR));
+        say(daemon, "en_NZ.utf8");
+        QCOMPARE(text("id-health-hourly-activity", "Hourly Activity"), QStringLiteral("Hourly activity"));
+        say(daemon, "en_US.utf8");
+        QCOMPARE(text("id-health-hourly-activity", "Hourly Activity"), QStringLiteral("Hourly Activity"));
+        QCOMPARE(textN("id-health-steps-left", 1, "%n step left\nthis hour", "%n steps left\nthis hour"),
+                 QStringLiteral("1 step left\nthis hour"));
+        say(daemon, "en_GB.utf8");
 #endif
     }
 

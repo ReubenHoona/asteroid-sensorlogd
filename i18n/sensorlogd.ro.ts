@@ -17,11 +17,11 @@
     </message>
     <message id="id-health-hr-high-detail">
         <source>Your heart rate rose above %1 bpm while you appeared to be inactive from %2 - %3.</source>
-        <translation>Pulsul ți-a crescut la peste %1 bpm în intervalul de inactivitate %2 – %3.&quot;</translation>
+        <translation>Pulsul ți-a crescut la peste %1 bpm în intervalul de inactivitate %2 – %3.</translation>
     </message>
     <message id="id-health-hr-low-detail">
         <source>Your heart rate fell below %1 bpm while you appeared to be inactive from %2 - %3.</source>
-        <translation>Pulsul ți-a scăzut sub %1 bpm în intervalul de inactivitate %2 – %3.&quot;</translation>
+        <translation>Pulsul ți-a scăzut sub %1 bpm în intervalul de inactivitate %2 – %3.</translation>
     </message>
     <message id="id-health-move-title">
         <source>Reminder to move</source>
