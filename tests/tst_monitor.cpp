@@ -189,6 +189,7 @@ private slots:
         QCOMPARE(n.hints.value("x-asteroid-detail").toString(),
                  QString("Your heart rate rose above 120 bpm while you appeared to be inactive from 2:00 PM - 2:10 PM."));
         QCOMPARE(n.hints.value("x-asteroid-category").toString(), QString("health-alert"));
+        QCOMPARE(n.hints.value("x-eos-app").toString(), QString("asteroid-health")); // R6 B-17: Settings' Health switch
         QCOMPARE(n.hints.value("x-nemo-preview-summary").toString(), n.summary);
         QCOMPARE(n.hints.value("x-nemo-preview-body").toString(), n.body);
         QCOMPARE(n.hints.value("x-nemo-feedback").toString(), QString("notif_strong"));
@@ -366,6 +367,7 @@ private slots:
         QCOMPARE(n.summary, QString("Reminder to move"));
         QCOMPARE(n.body, QString("150 steps left\nthis hour"));
         QCOMPARE(n.hints.value("x-asteroid-category").toString(), QString("celebration"));
+        QCOMPARE(n.hints.value("x-eos-app").toString(), QString("asteroid-health")); // R6 B-17
         QVERIFY(n.hints.value("transient").toBool());
         QCOMPARE(n.hints.value("x-nemo-feedback").toString(), QString("notif_strong")); // the vibration
         const QJsonObject j = healthJson(n);
@@ -406,6 +408,7 @@ private slots:
         QCOMPARE(healthJson(poster.posted[1])["steps"].toInt(), 250);
         // full screen in the launcher (x-asteroid-category celebration), no card left, its vibration the post's
         QCOMPARE(poster.posted[1].hints.value("x-asteroid-category").toString(), QString("celebration"));
+        QCOMPARE(poster.posted[1].hints.value("x-eos-app").toString(), QString("asteroid-health")); // R6 B-17
         QVERIFY(poster.posted[1].hints.value("transient").toBool());
         QCOMPARE(poster.posted[1].hints.value("x-nemo-feedback").toString(), QString("notif_strong"));
     }
@@ -521,6 +524,7 @@ private slots:
         QCOMPARE(n.summary, QString("Steps"));
         QCOMPARE(n.body, QString("Goal complete!\n600"));
         QCOMPARE(n.hints.value("x-asteroid-category").toString(), QString("celebration"));
+        QCOMPARE(n.hints.value("x-eos-app").toString(), QString("asteroid-health")); // R6 B-17
         QVERIFY(n.hints.value("transient").toBool());
         QVERIFY(n.hints.value("x-nemo-feedback").toString().isEmpty()); // the launcher's screen vibrates
         const QJsonObject j = healthJson(n);
@@ -656,6 +660,8 @@ private slots:
         QCOMPARE(poster.posted[0].summary, QString("Activity detected"));
         QCOMPARE(poster.posted[0].body, QString("Start tracking?"));
         QCOMPARE(poster.posted[0].hints.value("x-asteroid-category").toString(), QString("exercise-detect"));
+        // R6 B-17: the Exercise app's switch (its prompt; stock's one Fitbit package covers both)
+        QCOMPARE(poster.posted[0].hints.value("x-eos-app").toString(), QString("asteroid-exercise"));
         QVERIFY(poster.posted[0].hints.value("transient").toBool());
         QCOMPARE(offered.count(), 1);
         QCOMPARE(offered[0][0].toString(), QString("start"));

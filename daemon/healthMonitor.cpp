@@ -470,6 +470,7 @@ void HealthMonitor::postAlert(const HrAlert &alert)
             .arg(clockText(alert.endMs));
     n.hints.insert("x-asteroid-category", QStringLiteral("health-alert"));
     n.hints.insert("x-asteroid-detail", detail);
+    n.hints.insert("x-eos-app", QStringLiteral("asteroid-health")); // R6 B-17: Settings' per-app switch
     n.hints.insert("x-asteroid-health", json({{"type", high ? "hr-high" : "hr-low"}, {"bpm", alert.bpm},
                                               {"threshold", alert.threshold}, {"start", (double)alert.startMs},
                                               {"end", (double)alert.endMs}}));
@@ -488,6 +489,7 @@ void HealthMonitor::postMove(const MoveEvent &event)
 {
     HealthNotification n;
     n.icon = QStringLiteral("ios-walk");
+    n.hints.insert("x-eos-app", QStringLiteral("asteroid-health")); // R6 B-17
     n.hints.insert("x-asteroid-category", QStringLiteral("celebration"));
     n.hints.insert("transient", true);
     switch (event.kind) {
@@ -551,6 +553,7 @@ void HealthMonitor::postGoal(const MainGoal &goal, double value)
     n.hints.insert("x-asteroid-category", QStringLiteral("celebration"));
     n.hints.insert("transient", true);
     n.hints.insert("x-nemo-feedback", QString());
+    n.hints.insert("x-eos-app", QStringLiteral("asteroid-health")); // R6 B-17
     n.hints.insert("x-asteroid-health", json({{"type", "goal"}, {"metric", goal.metric()},
                                               {"value", std::round(value * 100) / 100}, {"goal", goal.target}}));
     postCelebration(n);
@@ -565,6 +568,7 @@ void HealthMonitor::postExercise(const ExerciseOffer &offer)
     n.body = QStringLiteral("Start tracking?");
     n.icon = QStringLiteral("ios-walk");
     n.hints.insert("x-asteroid-category", QStringLiteral("exercise-detect"));
+    n.hints.insert("x-eos-app", QStringLiteral("asteroid-exercise")); // R6 B-17: the Exercise app's switch
     n.hints.insert("transient", true);
     n.hints.insert("x-asteroid-exercise", json({{"action", "start"}, {"activity", offer.activity},
                                                 {"since", (double)offer.sinceMs}}));
